@@ -100,6 +100,7 @@ class IngestAPIView(generics.CreateAPIView):
 
             # Process the file and extract text
             text = process_file(file)
+            print("Extracted text: ", text)
             if not text:
                 return Response({"error": "File is empty or not supported."}, status=status.HTTP_400_BAD_REQUEST)
 

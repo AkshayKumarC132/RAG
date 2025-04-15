@@ -2,9 +2,9 @@
 
 from .embedding import get_embedding
 from .llm import generate_answer_with_context
-from .vector_store import QdrantVectorStore
+from .vector_store import FaissVectorStore
 
-vector_store = QdrantVectorStore()
+vector_store = FaissVectorStore()
 
 def rag_answer(question, tenant_id):
     query_embedding = get_embedding(question)

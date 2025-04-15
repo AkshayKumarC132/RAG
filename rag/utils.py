@@ -1,16 +1,19 @@
-import io
+import os
 import docx
 import PyPDF2
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from rest_framework.exceptions import ValidationError
 import textract
+import tempfile
+import pytesseract
+from PIL import Image
+import io
 
 def process_file(file):
     """
     Extract text from various types of documents.
     Supports PDFs, DOCX, and others. Add more file types as needed.
     """
-
     # Get the file extension
     ext = file.name.split('.')[-1].lower()
     print("Extension: ", ext)
@@ -19,23 +22,39 @@ def process_file(file):
         return extract_text_from_pdf(file)
     elif ext == 'docx':
         return extract_text_from_docx(file)
+    elif ext in ['png', 'jpg', 'jpeg']:
+        try:
+            # Convert InMemoryUploadedFile to image
+            img = Image.open(file)
+            
+            # Optional: Preprocess image for better OCR
+            img = img.convert('L')  # Convert to grayscale
+            # Enhance contrast or resize if needed (uncomment if required)
+            # img = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
+            
+            # Extract text using pytesseract
+            text = pytesseract.image_to_string(img)
+            return text.strip()
+        except Exception as e:
+            raise ValidationError(f"Error processing image: {str(e)}")
     else:
         try:
-            # If the file is an InMemoryUploadedFile, read its content in memory
-            if isinstance(file, InMemoryUploadedFile):
-                # Create a file-like object from the uploaded file
-                file_stream = io.BytesIO(file.read())
-                print("File stream: ", file_stream)
-                print("File name: ", file.name)
-                print("File size: ", file.size)
-                print("File type: ", file.content_type)
-                print()
-                text = textract.process(file_stream)  # Process the BytesIO object
-                return text.decode('utf-8')  # Decode the result to a string
-            else:
-                # For other types of files, use the temporary file path
-                text = textract.process(file.temporary_file_path()).decode('utf-8')
-                return text
+            # Handle InMemoryUploadedFile or other uploaded files
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as temp_file:
+                # Write the file content to the temporary file
+                for chunk in file.chunks():
+                    temp_file.write(chunk)
+                temp_file.flush()
+                temp_file_path = temp_file.name
+
+            # Process the file using textract
+            text = textract.process(temp_file_path)
+            text = text.decode('utf-8')
+
+            # Clean up the temporary file
+            os.unlink(temp_file_path)
+
+            return text
         except Exception as e:
             raise ValidationError(f"Error processing file: {str(e)}")
 
