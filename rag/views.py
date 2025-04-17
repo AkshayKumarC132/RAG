@@ -14,7 +14,10 @@ from .serializers import *
 from django.contrib.auth import authenticate, get_user_model
 from django.shortcuts import get_object_or_404
 from rest_framework.parsers import MultiPartParser, FormParser
-from .utils import process_file
+from .utils import extract_text_from_file, insert_document_to_vectorstore, ask_question
+import tempfile
+from pathlib import Path
+import time
 
 User = get_user_model()
 
@@ -75,66 +78,73 @@ class LogoutView(APIView):
         auth_token = get_object_or_404(AuthToken, token_key=token)
         auth_token.delete()
         return Response({'message': 'Logged out successfully.'}, status=status.HTTP_204_NO_CONTENT)
-
-class IngestAPIView(generics.CreateAPIView):
-    serializer_class = IngestDocumentSerializer
-    # parser_classes = [MultiPartParser, FormParser]  # Allow file uploads
-
-    def create(self, request, token, *args, **kwargs):
+class IngestAPIView(APIView):
+    def post(self, request, token):
         auth_token = get_object_or_404(AuthToken, token_key=token)
         user = auth_token.user
+        serializer = IngestDocumentSerializer(data=request.data)
+        if serializer.is_valid():
+            uploaded_file = serializer.validated_data['file']
+            source_type = "file"  # or dynamically decide if needed
 
-        # Check for file presence in request
-        file = request.FILES.get('file', None)
+            
+            # Save to a temp file
+            # with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp:
+                for chunk in uploaded_file.chunks():
+                    tmp.write(chunk)
+                tmp_path = tmp.name
 
-        if not file:
-            return Response({"error": "No file provided."}, status=status.HTTP_400_BAD_REQUEST)
+            print("Temporary file created at: ", tmp_path)
+            try:
+                # Get tenant from the user's token
+                tenant = user.tenant  # Assuming each user has one tenant
+                print("Tenant ID: ", tenant.id)
+                print("File name: ", uploaded_file.name)
+                
+                extracted_text = extract_text_from_file(tmp_path, uploaded_file.name)
+                file_ext = Path(uploaded_file.name).suffix.lower()
 
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
 
-        try:
-            # Get tenant from the user's token
-            tenant = user.tenant  # Assuming each user has one tenant
+                start = time.time()
 
-            # Process the file and extract text
-            text = process_file(file)
-            if not text:
-                return Response({"error": "File is empty or not supported."}, status=status.HTTP_400_BAD_REQUEST)
+                insert_document_to_vectorstore(extracted_text, source_type, file_ext)
 
-            # Save the document in the Document model
-            document = Document(
-                tenant=tenant,
-                title=data['title'],
-                content=text
-            )
-            document.save()
+                end = time.time()
+                print(f"[+] Embedding and storing in vector store took {end - start:.2f} seconds")
 
-            ingest_document(text, tenant.id, data['title'])
-            return Response({"status": "success", "message": "Document ingested."}, status=status.HTTP_201_CREATED)
-        except Tenant.DoesNotExist:
-            return Response({"error": "Tenant not found."}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                # Save the document in the Document model
+                document = Document(
+                    tenant=tenant,
+                    title=uploaded_file.name,
+                    content=extracted_text
+                )
+                document.save()
 
-class AskAPIView(generics.CreateAPIView):
-    serializer_class = AskQuestionSerializer
+                return Response({"message": "File ingested and stored successfully.",
+                                 "file name" : uploaded_file.name,
+                                 "document_id": document.id}, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)  # Clean up temp file
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    def create(self, request, token, *args, **kwargs):
+
+class AskAPIView(APIView):
+    def post(self, request, token):
         auth_token = get_object_or_404(AuthToken, token_key=token)
-        user = auth_token.user
-
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
-        try:
-            tenant = user.tenant  # Assuming each user has one tenant
-            answer = rag_answer(data['question'], tenant.id)
-            return Response({"answer": answer}, status=status.HTTP_200_OK)
-
-        except Tenant.DoesNotExist:
-            return Response({"error": "Tenant not found."}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # user = auth_token.user
+        serializer = AskQuestionSerializer(data=request.data)
+        if serializer.is_valid():
+            question = serializer.validated_data['question']
+            source_type = "file"  # or dynamic based on your design
+            
+            try:
+                answer = ask_question(question, source_type)
+                return Response({"answer": answer}, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

@@ -80,7 +80,7 @@ class LoginSerializer(serializers.Serializer):
 
 class IngestDocumentSerializer(serializers.Serializer):
     # text = serializers.CharField()
-    title = serializers.CharField(max_length=255, required=False, default="Untitled")
+    file = serializers.FileField(required=True)
 
 class AskQuestionSerializer(serializers.Serializer):
     question = serializers.CharField()
