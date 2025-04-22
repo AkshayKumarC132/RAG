@@ -17,3 +17,16 @@ class Document(models.Model):
     title = models.CharField(max_length=255)
     content = models.TextField()
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    vector_id = models.CharField(max_length=36, unique=True)  # Store UUID for vector DB
+
+    def __str__(self):
+        return self.title
+    
+
+class ChatHistory(models.Model):
+    vector_id = models.CharField(max_length=255, unique=True)
+    history = models.JSONField(default=list)  # Store as JSON array
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.vector_id

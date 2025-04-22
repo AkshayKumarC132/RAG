@@ -84,3 +84,4 @@ class IngestDocumentSerializer(serializers.Serializer):
 
 class AskQuestionSerializer(serializers.Serializer):
     question = serializers.CharField()
+    vector_id = serializers.CharField(required=False)
