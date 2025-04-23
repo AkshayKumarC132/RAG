@@ -114,9 +114,6 @@ class IngestAPIView(generics.CreateAPIView):
                 extracted_text = extract_text_from_file(tmp_path, uploaded_file.name)
                 file_ext = Path(uploaded_file.name).suffix.lower()
 
-                print(f"[+] Extracted text from {uploaded_file.name}: {extracted_text[:100]}...")  # Print first 100 chars
-
-
                 start = time.time()
 
                 insert_document_to_vectorstore(extracted_text, source_type, file_ext, vector_id)

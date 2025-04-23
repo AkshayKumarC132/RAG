@@ -27,6 +27,7 @@ from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain.prompts import PromptTemplate
 from concurrent.futures import ThreadPoolExecutor
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+from typing import List, Optional
 
 from langchain.chains.llm import LLMChain
 
@@ -81,64 +82,167 @@ qdrant = QdrantVectorStore(
 
 # ----------- File Extraction Logic -----------
 
-def extract_text_from_file(file_path: str, original_file_name: str) -> str:
+# def extract_text_from_file(file_path: str, original_file_name: str) -> str:
 
+#     ext = Path(original_file_name).suffix.lower()
+#     if ext == ".pdf":
+#         return extract_text_from_pdf(file_path)
+#     elif ext == ".docx":
+#         return extract_text_from_docx(file_path)
+#     elif ext in [".png", ".jpg", ".jpeg"]:
+#         return extract_text_from_image(file_path)
+#     elif ext == ".pptx":
+#         return extract_text_from_pptx(file_path)
+#     elif ext in [".xls", ".xlsx", ".csv"]:
+#         return extract_structured_from_excel_or_csv(file_path)
+#         # return extract_text_from_excel_or_csv(file_path)
+#     elif ext == ".txt":
+#         return extract_text_from_txt(file_path)
+#     elif ext == ".json":
+#         return extract_structured_from_json(file_path)
+#         # return extract_text_from_json(file_path)
+#     elif ext == ".xml":
+#         return extract_text_from_xml(file_path)
+#     elif ext == ".html":
+#         return extract_text_from_html(file_path)
+#     elif ext == ".md":  # Adding support for Markdown files
+#         return extract_text_from_md(file_path)
+#     elif ext == ".yaml" or ext == ".yml":  # Adding support for YAML files
+#         return extract_text_from_yaml(file_path)
+#     elif ext in [".ini", ".cfg"]:  # Adding support for configuration files
+#         return extract_text_from_ini(file_path)
+#     else:
+#         raise ValueError("Unsupported file type!")
+
+def extract_text_from_file(file_path: str, original_file_name: str) -> str:
     ext = Path(original_file_name).suffix.lower()
+    extracted_data = None  # Initialize a variable to hold the extracted text
+    
+    print(f"[+] Starting text extraction for {original_file_name} with extension {ext}...")
+    
     if ext == ".pdf":
-        return extract_text_from_pdf(file_path)
+        extracted_data = extract_text_from_pdf(file_path)
+    
     elif ext == ".docx":
-        return extract_text_from_docx(file_path)
+        extracted_data = extract_text_from_docx(file_path)
+    
     elif ext in [".png", ".jpg", ".jpeg"]:
-        return extract_text_from_image(file_path)
+        extracted_data = extract_text_from_image(file_path)
+    
     elif ext == ".pptx":
-        return extract_text_from_pptx(file_path)
+        extracted_data = extract_text_from_pptx(file_path)
+    
     elif ext in [".xls", ".xlsx", ".csv"]:
-        return extract_text_from_excel_or_csv(file_path)
+        extracted_data = extract_structured_from_excel_or_csv(file_path)
+        if isinstance(extracted_data, dict):
+            extracted_data = json.dumps(extracted_data)  # Convert to JSON string if dict
+        elif isinstance(extracted_data, list):
+            extracted_data = '\n'.join([json.dumps(item) for item in extracted_data])  # Convert list of dicts to string
+    
     elif ext == ".txt":
-        return extract_text_from_txt(file_path)
+        extracted_data = extract_text_from_txt(file_path)
+    
     elif ext == ".json":
-        return extract_text_from_json(file_path)
+        extracted_data = extract_structured_from_json(file_path)
+        if isinstance(extracted_data, dict):
+            extracted_data = json.dumps(extracted_data) # Serialize to JSON string
+    
     elif ext == ".xml":
-        return extract_text_from_xml(file_path)
+        extracted_data = extract_text_from_xml(file_path)
+    
     elif ext == ".html":
-        return extract_text_from_html(file_path)
+        extracted_data = extract_text_from_html(file_path)
+    
     elif ext == ".md":  # Adding support for Markdown files
-        return extract_text_from_md(file_path)
-    elif ext == ".yaml" or ext == ".yml":  # Adding support for YAML files
-        return extract_text_from_yaml(file_path)
+        extracted_data = extract_text_from_md(file_path)
+    
+    elif ext in [".yaml", ".yml"]:  # Adding support for YAML files
+        extracted_data = extract_text_from_yaml(file_path)
+    
     elif ext in [".ini", ".cfg"]:  # Adding support for configuration files
-        return extract_text_from_ini(file_path)
+        extracted_data = extract_text_from_ini(file_path)
+    
     else:
         raise ValueError("Unsupported file type!")
 
+    if isinstance(extracted_data, (str, list)):
+        print(f"[+] Successfully extracted data from {original_file_name}: {type(extracted_data)} with length {len(extracted_data)}")
+    elif isinstance(extracted_data, dict):
+        print(f"[+] Successfully extracted data from {original_file_name}: {type(extracted_data)} with {len(extracted_data.keys())} keys")
+    else:
+        print(f"[!] Error: Extracted data from {original_file_name} is of an unexpected type: {type(extracted_data)}")
+    print(extracted_data, '\n\n Extracted Data \n\n')
+    return extracted_data
+
 # ----------- Dynamic Metadata Extraction Logic -----------
 
-def extract_metadata(text: str, file_ext: str) -> dict:
+# def extract_metadata(text: str, file_ext: str) -> dict:
+#     metadata = {}
+
+#     if file_ext in [".csv", ".xls", ".xlsx"]:
+#         try:
+#             # Try extracting header columns
+#             lines = text.strip().split("\n")
+#             header = lines[0].split()
+#             for col in header:
+#                 metadata[f"column_{col.lower()}"] = True
+#         except Exception as e:
+#             print(f"[!] CSV/Excel metadata extraction failed: {e}")
+    
+#     elif file_ext in [".pdf", ".docx", ".pptx", ".txt"]:
+#         doc = nlp(text[:3000])  # Analyze only first 3000 chars for speed
+#         entities = {"ORG": [], "GPE": [], "DATE": []}
+#         for ent in doc.ents:
+#             if ent.label_ in entities:
+#                 entities[ent.label_].append(ent.text)
+
+#         if entities["ORG"]:
+#             metadata["organizations"] = list(set(entities["ORG"]))
+#         if entities["GPE"]:
+#             metadata["locations"] = list(set(entities["GPE"]))
+#         if entities["DATE"]:
+#             metadata["dates"] = list(set(entities["DATE"]))
+
+#     elif file_ext in [".png", ".jpg", ".jpeg"]:
+#         metadata["detected_from"] = "image"
+    
+#     else:
+#         metadata["type"] = "unknown"
+
+#     return metadata
+
+def extract_metadata(data, file_ext: str) -> dict:
     metadata = {}
 
-    if file_ext in [".csv", ".xls", ".xlsx"]:
+    if file_ext in [".csv", ".xls", ".xlsx", ".json"]:
         try:
-            # Try extracting header columns
-            lines = text.strip().split("\n")
-            header = lines[0].split()
-            for col in header:
-                metadata[f"column_{col.lower()}"] = True
+            if isinstance(data, (dict, list)):
+                # Structured - infer columns
+                if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                    header = data[0].keys()
+                elif isinstance(data, dict):
+                    header = data.keys()
+                else:
+                    header = []
+                for col in header:
+                    metadata[f"column_{col.lower()}"] = True
         except Exception as e:
-            print(f"[!] CSV/Excel metadata extraction failed: {e}")
-    
-    elif file_ext in [".pdf", ".docx", ".pptx", ".txt"]:
-        doc = nlp(text[:3000])  # Analyze only first 3000 chars for speed
-        entities = {"ORG": [], "GPE": [], "DATE": []}
-        for ent in doc.ents:
-            if ent.label_ in entities:
-                entities[ent.label_].append(ent.text)
+            print(f"[!] Structured metadata extraction failed: {e}")
 
-        if entities["ORG"]:
-            metadata["organizations"] = list(set(entities["ORG"]))
-        if entities["GPE"]:
-            metadata["locations"] = list(set(entities["GPE"]))
-        if entities["DATE"]:
-            metadata["dates"] = list(set(entities["DATE"]))
+    elif file_ext in [".pdf", ".docx", ".pptx", ".txt"]:
+        if isinstance(data, str):
+            doc = nlp(data[:3000])  # Only if it's text
+            entities = {"ORG": [], "GPE": [], "DATE": []}
+            for ent in doc.ents:
+                if ent.label_ in entities:
+                    entities[ent.label_].append(ent.text)
+
+            if entities["ORG"]:
+                metadata["organizations"] = list(set(entities["ORG"]))
+            if entities["GPE"]:
+                metadata["locations"] = list(set(entities["GPE"]))
+            if entities["DATE"]:
+                metadata["dates"] = list(set(entities["DATE"]))
 
     elif file_ext in [".png", ".jpg", ".jpeg"]:
         metadata["detected_from"] = "image"
@@ -215,6 +319,93 @@ def extract_text_from_excel_or_csv(path):
     # Convert dataframe to markdown-like format
     return df.to_string(index=False)
 
+# 4. Structured Excel/CSV (NEW)
+def read_csv_with_encoding_fallback(path):
+    try:
+        return pd.read_csv(path, encoding="utf-8")
+    except UnicodeDecodeError:
+        return pd.read_csv(path, encoding="latin1")  # fallback
+
+# def extract_structured_from_excel_or_csv(path):
+#     ext = Path(path).suffix.lower()
+
+#     if ext == ".csv":
+#         df = read_csv_with_encoding_fallback(path)
+#         return df.to_dict(orient="records")
+
+#     elif ext in [".xlsx", ".xls"]:
+#         if ext == ".xlsx":
+#             print("[+] Using openpyxl for .xlsx file")
+#             try:
+#                 xls = pd.ExcelFile(path, engine="openpyxl")
+#             except Exception as e:
+#                 print(f"[!] openpyxl failed: {e}. Trying xlrd...")
+#                 xls = pd.ExcelFile(path, engine="xlrd")
+#         else:
+#             xls = pd.ExcelFile(path, engine="xlrd")
+
+#         dfs = {}
+#         print("[+] Reading Excel file...", xls.sheet_names)
+#         for sheet_name in xls.sheet_names:
+#             sheet_df = xls.parse(sheet_name)
+#             dfs[sheet_name] = sheet_df.to_dict(orient="records")
+#         print(dfs)
+#         return dfs
+
+#     else:
+#         raise ValueError("Unsupported Excel/CSV file extension!")
+
+def extract_structured_from_excel_or_csv(path):
+    ext = Path(path).suffix.lower()
+
+    if ext == ".csv":
+        df = read_csv_with_encoding_fallback(path)
+        return df.to_dict(orient="records")
+
+    elif ext in [".xlsx", ".xls"]:
+        if ext == ".xlsx":
+            print("[+] Using openpyxl for .xlsx file")
+            try:
+                xls = pd.ExcelFile(path, engine="openpyxl")
+            except Exception as e:
+                print(f"[!] openpyxl failed: {e}. Trying xlrd...")
+                xls = pd.ExcelFile(path, engine="xlrd")
+        else:
+            xls = pd.ExcelFile(path, engine="xlrd")
+
+        dfs = {}
+        print("[+] Reading Excel file...", xls.sheet_names)
+        for sheet_name in xls.sheet_names:
+            sheet_df = xls.parse(sheet_name)
+
+            # Checking for any potential issues in data types
+            print(f"Processing sheet: {sheet_name}")
+            print(sheet_df.dtypes)  # Display column data types
+            
+            if not sheet_df.empty:
+                # Convert any potential Timestamp to string
+                for col in sheet_df.columns:
+                    if pd.api.types.is_datetime64_any_dtype(sheet_df[col]):
+                        sheet_df[col] = sheet_df[col].astype(str)
+                
+                # Ensure to_dict can process the data safely
+                try:
+                    dfs[sheet_name] = sheet_df.to_dict(orient="records")
+                except Exception as e:
+                    print(f"[!] Error converting sheet '{sheet_name}' to dict: {e}")
+            else:
+                print(f"[!] Warning: Sheet '{sheet_name}' is empty.")
+                
+        # Output the resulting structure clearly
+        print("[+] Resulting structured data:")
+        for k, v in dfs.items():
+            print(f"Sheet: {k}, Records: {len(v)}")
+            print(v)  # Print the content for visibility
+        return dfs
+
+    else:
+        raise ValueError("Unsupported Excel/CSV file extension!")
+
 # 5. Image
 def preprocess_image(path):
     img = cv2.imread(path)
@@ -234,10 +425,16 @@ def extract_text_from_txt(file_path: str) -> str:
         return f.read()
 
 # 7. JSON
-def extract_text_from_json(file_path: str) -> str:
+# def extract_text_from_json(file_path: str) -> str:
+#     with open(file_path, "r", encoding="utf-8") as f:
+#         data = json.load(f)
+#     return json.dumps(data, indent=4)  # pretty prints JSON
+
+def extract_structured_from_json(file_path: str):
     with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return json.dumps(data, indent=4)  # pretty prints JSON
+    return data
+
 
 # 8. XML
 def extract_text_from_xml(file_path: str) -> str:
@@ -281,6 +478,7 @@ def extract_text_from_ini(file_path: str) -> str:
 def insert_document_to_vectorstore(text: str, source_type: str, file_ext: str,vector_id: str):
     
     docs = smart_split_text(text, file_ext)
+    print(f"[+] Splitting text into {len(docs)} chunks...")
 
     # Extract global metadata once for the whole file
     global_metadata = extract_metadata(text, file_ext)
@@ -317,31 +515,83 @@ def split_text_into_chunks(text: str, chunk_size=1000, chunk_overlap=200):
 
 def split_csv_rows(text: str, max_lines_per_chunk=50):
     lines = text.strip().split("\n")
+    if len(lines) == 0:
+        print("[!] No lines found in CSV text.")
+        return []
     header = lines[0]
     data_lines = lines[1:]
 
+    if len(data_lines) == 0:
+        print("[!] No data lines found, only header.")
+        return []
+
     chunks = []
     for i in range(0, len(data_lines), max_lines_per_chunk):
-        chunk_text = "\n".join([header] + data_lines[i:i+max_lines_per_chunk])
+        chunk_text = "\n".join([header] + data_lines[i:i + max_lines_per_chunk])
         chunks.append(LangChainDocument(page_content=chunk_text, metadata={"chunk": i // max_lines_per_chunk + 1}))
+    print(f"[+] Created {len(chunks)} chunks from CSV rows.")
     return chunks
 
 def split_unstructured_text(text: str, chunk_size=1000, chunk_overlap=200):
+    if len(text.strip()) == 0:
+        print("[!] No text provided for unstructured splitting.")
+        return []
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         separators=["\n\n", "\n", " ", ""]
     )
+    
     docs = splitter.create_documents([text])
+    if len(docs) == 0:
+        print("[!] No documents created from unstructured text.")
+    
     for i, doc in enumerate(docs):
         doc.metadata["chunk"] = i + 1
+        print(f"[+] Created chunk {i + 1} with content of length {len(doc.page_content)}.")
+    
     return docs
 
+def split_json_rows(json_text):
+    from langchain.schema import Document
+    try:
+        data = json.loads(json_text)
+        documents = []
+        if isinstance(data, list):
+            for i, item in enumerate(data):
+                documents.append(Document(page_content=str(item), metadata={"source": "JSON_item", "chunk": i + 1}))
+        elif isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, list):
+                    for i, item in enumerate(value):
+                        documents.append(Document(page_content=str(item), metadata={"source": key, "chunk": i + 1, "type": type(item).__name__}))
+                elif isinstance(value, dict):
+                    documents.append(Document(page_content=str(value), metadata={"source": key, "type": type(value).__name__}))
+                elif value is not None:
+                    documents.append(Document(page_content=str(value), metadata={"source": key, "type": type(value).__name__}))
+        return documents
+    except json.JSONDecodeError as e:
+        print(f"JSON decode error: {e}")
+        return []
+    
+
 def smart_split_text(text: str, file_ext: str):
-    if file_ext in [".csv", ".xls", ".xlsx"]:
-        return split_csv_rows(text)
+    if file_ext == ".json" or (text.startswith('{') and text.endswith('}')):
+        print(f"[+] Detected JSON format. Preparing to parse...")
+        return split_json_rows(text)
+    
+    elif file_ext in [".csv", ".xls", ".xlsx"]:
+        print(f"[+] Splitting CSV/Excel text into rows...")
+        docs = split_csv_rows(text)
+        print(f"[+] Split into {len(docs)} documents.")
+        return docs
+    
     else:
-        return split_unstructured_text(text)
+        print(f"[+] Splitting unstructured text into chunks...")
+        docs = split_unstructured_text(text)
+        print(f"[+] Split into {len(docs)} documents.")
+        return docs
 
 
 
@@ -463,14 +713,33 @@ def smart_split_text(text: str, file_ext: str):
 
 
 
-def summarize_batch(batch_docs):
+def estimate_tokens(text: str) -> int:
+    """Roughly estimate the number of tokens in a text (assuming ~4 characters per token)."""
+    return len(text) // 4
+
+def summarize_batch(batch_docs: List[LangChainDocument]) -> str:
+    """Summarize a batch of documents."""
     combined_context = "\n".join([doc.page_content for doc in batch_docs])
     summary = summarize_context(combined_context)
-    
-    # Make sure it's a string
     return summary if isinstance(summary, str) else str(summary)
 
-def ask_question(query: str, source_type: str, documents=None):
+def summarize_context(context_text: str) -> str:
+    """Summarize a large text into a small focused version."""
+    prompt = f"Summarize the following content concisely and accurately:\n\n{context_text}\n\nSummary:"
+    response = llm.invoke(prompt)
+    
+    if hasattr(response, "content"):
+        return response.content
+    elif isinstance(response, dict) and "text" in response:
+        return response["text"]
+    return str(response)
+
+def batch_documents(documents: List[LangChainDocument], batch_size: int = 5):
+    """Yield successive batches of documents."""
+    for i in range(0, len(documents), batch_size):
+        yield documents[i:i + batch_size]
+
+def ask_question(query: str, source_type: str, documents: Optional[List[dict]] = None) -> str:
     try:
         start = time.time()
 
@@ -481,6 +750,8 @@ def ask_question(query: str, source_type: str, documents=None):
         """
 
         final_context = ""
+        max_token_threshold = 4000  # Adjust based on your LLM's token limit
+        batch_size = 5  # Number of documents per batch for large datasets
 
         if documents:
             print("[+] Using provided documents as context")
@@ -497,21 +768,29 @@ def ask_question(query: str, source_type: str, documents=None):
             retrieved_docs = retriever.get_relevant_documents(query)
             print(f"[+] Retrieved {len(retrieved_docs)} documents")
 
-            # Map Phase: Summarize batches in parallel
-            batch_size = 5
-            batches = list(batch_documents(retrieved_docs, batch_size=batch_size))
+            # Estimate total token count of retrieved documents
+            combined_content = "\n".join([doc.page_content for doc in retrieved_docs])
+            estimated_tokens = estimate_tokens(combined_content)
+            print(f"[+] Estimated tokens in retrieved documents: {estimated_tokens}")
 
-            summaries = []
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = [executor.submit(summarize_batch, batch) for batch in batches]
-                for future in futures:
-                    summaries.append(future.result())
+            if estimated_tokens <= max_token_threshold and len(retrieved_docs) <= 10:
+                # For small datasets, use raw document content directly
+                print("[+] Using raw document content (small dataset)")
+                final_context = combined_content
+            else:
+                # For large datasets, batch and summarize
+                print("[+] Batching and summarizing (large dataset)")
+                batches = list(batch_documents(retrieved_docs, batch_size=batch_size))
+                summaries = []
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    futures = [executor.submit(summarize_batch, batch) for batch in batches]
+                    for future in futures:
+                        summaries.append(future.result())
 
-            # Reduce Phase: Summarize all summaries into one
-            combined_summary = "\n".join(summaries)
-            final_context = summarize_context(combined_summary)
-
-            print(f"[+] Summarized {len(batches)} batches and reduced to final context")
+                # Combine and summarize all batch summaries
+                combined_summary = "\n".join(summaries)
+                final_context = summarize_context(combined_summary)
+                print(f"[+] Summarized {len(batches)} batches and reduced to final context")
 
         else:
             print("[+] Using default Qdrant collection retriever")
@@ -543,28 +822,6 @@ def ask_question(query: str, source_type: str, documents=None):
     except Exception as e:
         print(f"[!] Error in ask_question: {e}")
         raise
-
-
-def summarize_context(context_text):
-    """Summarizes a large text into a small focused version."""
-    prompt = f"Summarize the following content concisely and accurately:\n\n{context_text}\n\nSummary:"
-    
-    response = llm.invoke(prompt)
-    
-    # Handle if response is AIMessage, dict, or just text
-    if hasattr(response, "content"):
-        return response.content
-    elif isinstance(response, dict) and "text" in response:
-        return response["text"]
-    else:
-        return str(response)
-
-
-def batch_documents(documents, batch_size=5):
-    """Yield successive batches of documents."""
-    for i in range(0, len(documents), batch_size):
-        yield documents[i:i + batch_size]
-
 
 # -----------  Deep Search + Reasoning ----------- 
 
