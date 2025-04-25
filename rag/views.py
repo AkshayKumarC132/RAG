@@ -1,8 +1,6 @@
 # rag/views.py
 
 from django.http import JsonResponse
-from .retrival import rag_answer
-from .injection_pipeline import ingest_document
 from .models import Tenant,Document, ChatHistory
 import json
 from rest_framework.decorators import api_view
