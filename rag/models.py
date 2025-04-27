@@ -18,7 +18,9 @@ class Document(models.Model):
     content = models.TextField()
     uploaded_at = models.DateTimeField(auto_now_add=True)
     vector_id = models.CharField(max_length=36, unique=True)  # Store UUID for vector DB
-
+    summary = models.TextField(blank=True, null=True)
+    keywords = models.JSONField(blank=True, null=True)  # for array of keywords
+    
     def __str__(self):
         return self.title
     

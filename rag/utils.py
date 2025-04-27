@@ -739,89 +739,89 @@ def batch_documents(documents: List[LangChainDocument], batch_size: int = 5):
     for i in range(0, len(documents), batch_size):
         yield documents[i:i + batch_size]
 
-# def ask_question(query: str, source_type: str, documents: Optional[List[dict]] = None) -> str:
-#     try:
-#         start = time.time()
+def ask_question_for_single_document(query: str, source_type: str, documents: Optional[List[dict]] = None) -> str:
+    try:
+        start = time.time()
 
-#         system_prompt = """
-#         You are a helpful document analyst. Your role is to provide accurate, concise, and detailed answers based on the provided document context. 
-#         Use the information in the documents to answer the question directly and avoid including irrelevant details. 
-#         If the documents do not contain enough information to answer the question, state so clearly.
-#         """
+        system_prompt = """
+        You are a helpful document analyst. Your role is to provide accurate, concise, and detailed answers based on the provided document context. 
+        Use the information in the documents to answer the question directly and avoid including irrelevant details. 
+        If the documents do not contain enough information to answer the question, state so clearly.
+        """
 
-#         final_context = ""
-#         max_token_threshold = 4000  # Adjust based on your LLM's token limit
-#         batch_size = 5  # Number of documents per batch for large datasets
+        final_context = ""
+        max_token_threshold = 4000  # Adjust based on your LLM's token limit
+        batch_size = 5  # Number of documents per batch for large datasets
 
-#         if documents:
-#             print("[+] Using provided documents as context")
-#             vector_id = documents[0]["metadata"]["vector_id"]
-#             filter = Filter(
-#                 must=[
-#                     FieldCondition(
-#                         key="metadata.vector_id",
-#                         match=MatchValue(value=vector_id)
-#                     )
-#                 ]
-#             )
-#             retriever = qdrant.as_retriever(search_kwargs={"k": len(documents), "filter": filter})
-#             retrieved_docs = retriever.get_relevant_documents(query)
-#             print(f"[+] Retrieved {len(retrieved_docs)} documents")
+        if documents:
+            print("[+] Using provided documents as context")
+            vector_id = documents[0]["metadata"]["vector_id"]
+            filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="metadata.vector_id",
+                        match=MatchValue(value=vector_id)
+                    )
+                ]
+            )
+            retriever = qdrant.as_retriever(search_kwargs={"k": len(documents), "filter": filter})
+            retrieved_docs = retriever.get_relevant_documents(query)
+            print(f"[+] Retrieved {len(retrieved_docs)} documents")
 
-#             # Estimate total token count of retrieved documents
-#             combined_content = "\n".join([doc.page_content for doc in retrieved_docs])
-#             estimated_tokens = estimate_tokens(combined_content)
-#             print(f"[+] Estimated tokens in retrieved documents: {estimated_tokens}")
+            # Estimate total token count of retrieved documents
+            combined_content = "\n".join([doc.page_content for doc in retrieved_docs])
+            estimated_tokens = estimate_tokens(combined_content)
+            print(f"[+] Estimated tokens in retrieved documents: {estimated_tokens}")
 
-#             if estimated_tokens <= max_token_threshold and len(retrieved_docs) <= 10:
-#                 # For small datasets, use raw document content directly
-#                 print("[+] Using raw document content (small dataset)")
-#                 final_context = combined_content
-#             else:
-#                 # For large datasets, batch and summarize
-#                 print("[+] Batching and summarizing (large dataset)")
-#                 batches = list(batch_documents(retrieved_docs, batch_size=batch_size))
-#                 summaries = []
-#                 with ThreadPoolExecutor(max_workers=5) as executor:
-#                     futures = [executor.submit(summarize_batch, batch) for batch in batches]
-#                     for future in futures:
-#                         summaries.append(future.result())
+            if estimated_tokens <= max_token_threshold and len(retrieved_docs) <= 10:
+                # For small datasets, use raw document content directly
+                print("[+] Using raw document content (small dataset)")
+                final_context = combined_content
+            else:
+                # For large datasets, batch and summarize
+                print("[+] Batching and summarizing (large dataset)")
+                batches = list(batch_documents(retrieved_docs, batch_size=batch_size))
+                summaries = []
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    futures = [executor.submit(summarize_batch, batch) for batch in batches]
+                    for future in futures:
+                        summaries.append(future.result())
 
-#                 # Combine and summarize all batch summaries
-#                 combined_summary = "\n".join(summaries)
-#                 final_context = summarize_context(combined_summary)
-#                 print(f"[+] Summarized {len(batches)} batches and reduced to final context")
+                # Combine and summarize all batch summaries
+                combined_summary = "\n".join(summaries)
+                final_context = summarize_context(combined_summary)
+                print(f"[+] Summarized {len(batches)} batches and reduced to final context")
 
-#         else:
-#             print("[+] Using default Qdrant collection retriever")
-#             retriever = qdrant.as_retriever(search_kwargs={"k": 5})
-#             retrieved_docs = retriever.get_relevant_documents(query)
-#             final_context = "\n".join([doc.page_content for doc in retrieved_docs])
+        else:
+            print("[+] Using default Qdrant collection retriever")
+            retriever = qdrant.as_retriever(search_kwargs={"k": 5})
+            retrieved_docs = retriever.get_relevant_documents(query)
+            final_context = "\n".join([doc.page_content for doc in retrieved_docs])
 
-#         end = time.time()
-#         print(f"[+] Retrieved and processed context in: {end - start:.2f} seconds")
+        end = time.time()
+        print(f"[+] Retrieved and processed context in: {end - start:.2f} seconds")
 
-#         # Final QA
-#         prompt_template = PromptTemplate(
-#             template="""{system_prompt}\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:""",
-#             input_variables=["system_prompt", "context", "question"]
-#         )
+        # Final QA
+        prompt_template = PromptTemplate(
+            template="""{system_prompt}\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:""",
+            input_variables=["system_prompt", "context", "question"]
+        )
 
-#         qa_chain = LLMChain(
-#             llm=llm,
-#             prompt=prompt_template.partial(system_prompt=system_prompt, context=final_context)
-#         )
+        qa_chain = LLMChain(
+            llm=llm,
+            prompt=prompt_template.partial(system_prompt=system_prompt, context=final_context)
+        )
 
-#         start_time = time.time()
-#         result = qa_chain.invoke({"question": query})["text"]
-#         end_time = time.time()
-#         print(f"[+] Question answered in: {end_time - start_time:.2f} seconds")
+        start_time = time.time()
+        result = qa_chain.invoke({"question": query})["text"]
+        end_time = time.time()
+        print(f"[+] Question answered in: {end_time - start_time:.2f} seconds")
 
-#         return result
+        return result
 
-#     except Exception as e:
-#         print(f"[!] Error in ask_question: {e}")
-#         raise
+    except Exception as e:
+        print(f"[!] Error in ask_question: {e}")
+        raise
 
 def ask_question(query: str, source_type: str, documents: Optional[List[dict]] = None) -> str:
     try:

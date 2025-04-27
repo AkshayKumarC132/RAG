@@ -13,7 +13,7 @@ from .serializers import *
 from django.contrib.auth import authenticate, get_user_model
 from django.shortcuts import get_object_or_404
 from rest_framework.parsers import MultiPartParser, FormParser
-from .utils import extract_text_from_file, insert_document_to_vectorstore, ask_question, retrieve_documents_by_vector_id,delete_documents_by_vector_id, retrieve_documents_by_vector_ids
+from .utils import extract_text_from_file, insert_document_to_vectorstore, ask_question, retrieve_documents_by_vector_id,delete_documents_by_vector_id, retrieve_documents_by_vector_ids,summarize_context, extract_metadata,ask_question_for_single_document
 import tempfile
 from pathlib import Path
 import time
@@ -128,6 +128,8 @@ class IngestAPIView(generics.CreateAPIView):
                 )
                 document.save()
 
+                self.enrich_document(document, extracted_text, file_ext)
+
                 return Response({"message": "File ingested and stored successfully.",
                                  "file name" : uploaded_file.name,
                                  "document_id": document.id,
@@ -142,11 +144,31 @@ class IngestAPIView(generics.CreateAPIView):
     def get(self, request, token):
         auth_token = get_object_or_404(AuthToken, token_key=token)
         user = auth_token.user
-        documents = Document.objects.filter(tenant=user.tenant).values('id', 'title', 'vector_id','uploaded_at')
+        documents = Document.objects.filter(tenant=user.tenant).defer('vector_id').values()
         if not documents:
             return Response({"message": "No documents found."}, status=status.HTTP_404_NOT_FOUND)
         return Response({"documents": list(documents)}, status=status.HTTP_200_OK)
 
+
+    def enrich_document(self,document_obj, file_text, file_ext):
+        try:
+            if not file_text.strip():
+                print("[!] Empty file content, skipping enrichment")
+                return
+
+            # Summarize the document (first 3000 chars)
+            summary = summarize_context(file_text[:3000])
+            # Extract keywords/metadata
+            metadata = extract_metadata(file_text, file_ext)
+
+            document_obj.summary = summary
+            document_obj.keywords = metadata
+            document_obj.save()
+
+            print(f"[+] Enriched document {document_obj.title} with summary and keywords.")
+
+        except Exception as e:
+            print(f"[!] Failed to enrich document: {e}")
 
 class AskAPIView(generics.CreateAPIView):
     serializer_class = AskQuestionSerializer
@@ -172,7 +194,7 @@ class AskAPIView(generics.CreateAPIView):
                     print(f"[+] Retrieved documents for vector_id {vector_id}: {documents}")
                     if not documents:
                         return Response({"error": "No documents found for the given vector_id."}, status=status.HTTP_404_NOT_FOUND)
-                    answer = ask_question(question, source_type, documents=documents)
+                    answer = ask_question_for_single_document(question, source_type, documents=documents)
                     # return Response({"vector_id": vector_id, "documents": documents}, status=status.HTTP_200_OK)
                 else:
                     answer = ask_question(question, source_type)
