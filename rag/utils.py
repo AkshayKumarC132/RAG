@@ -739,7 +739,7 @@ def batch_documents(documents: List[LangChainDocument], batch_size: int = 5):
     for i in range(0, len(documents), batch_size):
         yield documents[i:i + batch_size]
 
-def ask_question_for_single_document(query: str, source_type: str, documents: Optional[List[dict]] = None) -> str:
+def ask_question_for_single_document(query: str, source_type: str, documents: Optional[List[dict]] = None, chat_history: Optional[List[dict]] = None) -> str:
     try:
         start = time.time()
 
@@ -752,6 +752,20 @@ def ask_question_for_single_document(query: str, source_type: str, documents: Op
         final_context = ""
         max_token_threshold = 4000  # Adjust based on your LLM's token limit
         batch_size = 5  # Number of documents per batch for large datasets
+
+        memory_context = ""
+
+        if chat_history:
+            memory_pairs = []
+            for turn in chat_history:
+                role = turn.get("role", "")
+                content = turn.get("content", "")
+                if role == "user":
+                    memory_pairs.append(f"User: {content}")
+                elif role == "assistant":
+                    memory_pairs.append(f"Assistant: {content}")
+            memory_context = "\n".join(memory_pairs)
+            print(f"[+] Built memory context with {len(memory_pairs)} turns")
 
         if documents:
             print("[+] Using provided documents as context")
@@ -803,13 +817,30 @@ def ask_question_for_single_document(query: str, source_type: str, documents: Op
 
         # Final QA
         prompt_template = PromptTemplate(
-            template="""{system_prompt}\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:""",
-            input_variables=["system_prompt", "context", "question"]
+            template="""
+                {system_prompt}
+
+                Context:
+                {context}
+
+                Conversation History:
+                {memory}
+
+                Current Question:
+                {question}
+
+                Answer:
+                """,
+                input_variables=["system_prompt", "context", "memory", "question"]
         )
 
         qa_chain = LLMChain(
             llm=llm,
-            prompt=prompt_template.partial(system_prompt=system_prompt, context=final_context)
+            prompt=prompt_template.partial(
+                system_prompt=system_prompt,
+                context=final_context,
+                memory=memory_context
+            )
         )
 
         start_time = time.time()
@@ -823,7 +854,7 @@ def ask_question_for_single_document(query: str, source_type: str, documents: Op
         print(f"[!] Error in ask_question: {e}")
         raise
 
-def ask_question(query: str, source_type: str, documents: Optional[List[dict]] = None) -> str:
+def ask_question(query: str, source_type: str, documents: Optional[List[dict]] = None, chat_history: Optional[List[dict]] = None) -> str:
     try:
         start = time.time()
 
@@ -836,6 +867,19 @@ def ask_question(query: str, source_type: str, documents: Optional[List[dict]] =
         final_context = ""
         max_token_threshold = 4000  # Approximate LLM context limit
         batch_size = 5
+
+        memory_context = ""
+
+        if chat_history:
+            memory_pairs = []
+            for turn in chat_history:
+                role = turn.get("role", "")
+                content = turn.get("content", "")
+                if role == "user":
+                    memory_pairs.append(f"User: {content}")
+                elif role == "assistant":
+                    memory_pairs.append(f"Assistant: {content}")
+            memory_context = "\n".join(memory_pairs)
 
         if documents:
             print("[+] Using provided documents as context")
@@ -891,15 +935,32 @@ def ask_question(query: str, source_type: str, documents: Optional[List[dict]] =
         end = time.time()
         print(f"[+] Retrieved and processed context in: {end - start:.2f} seconds")
 
-        # QA Chain
+        # Build full prompt
         prompt_template = PromptTemplate(
-            template="""{system_prompt}\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:""",
-            input_variables=["system_prompt", "context", "question"]
+            template="""
+                {system_prompt}
+
+                Context:
+                {context}
+
+                Conversation History:
+                {memory}
+
+                Current Question:
+                {question}
+
+                Answer:
+                """,
+                input_variables=["system_prompt", "context", "memory", "question"]
         )
 
         qa_chain = LLMChain(
             llm=llm,
-            prompt=prompt_template.partial(system_prompt=system_prompt, context=final_context)
+            prompt=prompt_template.partial(
+                system_prompt=system_prompt,
+                context=final_context,
+                memory=memory_context
+            )
         )
 
         start_time = time.time()

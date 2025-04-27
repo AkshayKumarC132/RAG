@@ -179,6 +179,7 @@ class AskAPIView(generics.CreateAPIView):
         if serializer.is_valid():
             question = serializer.validated_data['question']
             vector_id = serializer.validated_data.get('vector_id')  # Optional field in serializer
+            chat_history = serializer.validated_data.get('chat_history')  # Optional field in serializer
             source_type = "file"  # or dynamic based on your design
 
             if not question:
@@ -194,10 +195,10 @@ class AskAPIView(generics.CreateAPIView):
                     print(f"[+] Retrieved documents for vector_id {vector_id}: {documents}")
                     if not documents:
                         return Response({"error": "No documents found for the given vector_id."}, status=status.HTTP_404_NOT_FOUND)
-                    answer = ask_question_for_single_document(question, source_type, documents=documents)
+                    answer = ask_question_for_single_document(question, source_type=source_type, documents=documents, chat_history=chat_history)
                     # return Response({"vector_id": vector_id, "documents": documents}, status=status.HTTP_200_OK)
                 else:
-                    answer = ask_question(question, source_type)
+                    answer = ask_question(question, source_type,chat_history)
                 return Response({"answer": answer}, status=status.HTTP_200_OK)
             except Exception as e:
                 return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
