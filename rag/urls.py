@@ -15,4 +15,7 @@ urlpatterns = [
     path('delete/<str:token>/<vector_id>', views.DeleteDocumentAPIView.as_view(), name='delete_document'),
 
     path('chat-history/<str:token>/<str:vector_id>/', views.chat_history, name='chat-history'),
+
+    path('multifile-ask/<str:token>/', views.MultiFileAskAPIView.as_view(), name='multifile-ask'),
+    path('global-ask/<str:token>/', views.GlobalAskAPIView.as_view(), name='global-ask'),
 ]

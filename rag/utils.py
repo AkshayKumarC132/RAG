@@ -16,7 +16,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_qdrant import QdrantVectorStore
 
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
+from qdrant_client.http.models import Distance, VectorParams, MatchAny, MatchValue
 import time
 from sentence_transformers import SentenceTransformer
 from langchain.schema import Document as LangChainDocument  # <-- Rename it
@@ -739,6 +739,90 @@ def batch_documents(documents: List[LangChainDocument], batch_size: int = 5):
     for i in range(0, len(documents), batch_size):
         yield documents[i:i + batch_size]
 
+# def ask_question(query: str, source_type: str, documents: Optional[List[dict]] = None) -> str:
+#     try:
+#         start = time.time()
+
+#         system_prompt = """
+#         You are a helpful document analyst. Your role is to provide accurate, concise, and detailed answers based on the provided document context. 
+#         Use the information in the documents to answer the question directly and avoid including irrelevant details. 
+#         If the documents do not contain enough information to answer the question, state so clearly.
+#         """
+
+#         final_context = ""
+#         max_token_threshold = 4000  # Adjust based on your LLM's token limit
+#         batch_size = 5  # Number of documents per batch for large datasets
+
+#         if documents:
+#             print("[+] Using provided documents as context")
+#             vector_id = documents[0]["metadata"]["vector_id"]
+#             filter = Filter(
+#                 must=[
+#                     FieldCondition(
+#                         key="metadata.vector_id",
+#                         match=MatchValue(value=vector_id)
+#                     )
+#                 ]
+#             )
+#             retriever = qdrant.as_retriever(search_kwargs={"k": len(documents), "filter": filter})
+#             retrieved_docs = retriever.get_relevant_documents(query)
+#             print(f"[+] Retrieved {len(retrieved_docs)} documents")
+
+#             # Estimate total token count of retrieved documents
+#             combined_content = "\n".join([doc.page_content for doc in retrieved_docs])
+#             estimated_tokens = estimate_tokens(combined_content)
+#             print(f"[+] Estimated tokens in retrieved documents: {estimated_tokens}")
+
+#             if estimated_tokens <= max_token_threshold and len(retrieved_docs) <= 10:
+#                 # For small datasets, use raw document content directly
+#                 print("[+] Using raw document content (small dataset)")
+#                 final_context = combined_content
+#             else:
+#                 # For large datasets, batch and summarize
+#                 print("[+] Batching and summarizing (large dataset)")
+#                 batches = list(batch_documents(retrieved_docs, batch_size=batch_size))
+#                 summaries = []
+#                 with ThreadPoolExecutor(max_workers=5) as executor:
+#                     futures = [executor.submit(summarize_batch, batch) for batch in batches]
+#                     for future in futures:
+#                         summaries.append(future.result())
+
+#                 # Combine and summarize all batch summaries
+#                 combined_summary = "\n".join(summaries)
+#                 final_context = summarize_context(combined_summary)
+#                 print(f"[+] Summarized {len(batches)} batches and reduced to final context")
+
+#         else:
+#             print("[+] Using default Qdrant collection retriever")
+#             retriever = qdrant.as_retriever(search_kwargs={"k": 5})
+#             retrieved_docs = retriever.get_relevant_documents(query)
+#             final_context = "\n".join([doc.page_content for doc in retrieved_docs])
+
+#         end = time.time()
+#         print(f"[+] Retrieved and processed context in: {end - start:.2f} seconds")
+
+#         # Final QA
+#         prompt_template = PromptTemplate(
+#             template="""{system_prompt}\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:""",
+#             input_variables=["system_prompt", "context", "question"]
+#         )
+
+#         qa_chain = LLMChain(
+#             llm=llm,
+#             prompt=prompt_template.partial(system_prompt=system_prompt, context=final_context)
+#         )
+
+#         start_time = time.time()
+#         result = qa_chain.invoke({"question": query})["text"]
+#         end_time = time.time()
+#         print(f"[+] Question answered in: {end_time - start_time:.2f} seconds")
+
+#         return result
+
+#     except Exception as e:
+#         print(f"[!] Error in ask_question: {e}")
+#         raise
+
 def ask_question(query: str, source_type: str, documents: Optional[List[dict]] = None) -> str:
     try:
         start = time.time()
@@ -750,50 +834,56 @@ def ask_question(query: str, source_type: str, documents: Optional[List[dict]] =
         """
 
         final_context = ""
-        max_token_threshold = 4000  # Adjust based on your LLM's token limit
-        batch_size = 5  # Number of documents per batch for large datasets
+        max_token_threshold = 4000  # Approximate LLM context limit
+        batch_size = 5
 
         if documents:
             print("[+] Using provided documents as context")
-            vector_id = documents[0]["metadata"]["vector_id"]
-            filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="metadata.vector_id",
-                        match=MatchValue(value=vector_id)
-                    )
-                ]
-            )
-            retriever = qdrant.as_retriever(search_kwargs={"k": len(documents), "filter": filter})
-            retrieved_docs = retriever.get_relevant_documents(query)
-            print(f"[+] Retrieved {len(retrieved_docs)} documents")
+            # Group documents by vector_id (i.e., per file)
+            grouped_docs = {}
+            for doc in documents:
+                vector_id = doc["metadata"].get("vector_id", "unknown")
+                if vector_id not in grouped_docs:
+                    grouped_docs[vector_id] = []
+                grouped_docs[vector_id].append(doc)
 
-            # Estimate total token count of retrieved documents
-            combined_content = "\n".join([doc.page_content for doc in retrieved_docs])
-            estimated_tokens = estimate_tokens(combined_content)
-            print(f"[+] Estimated tokens in retrieved documents: {estimated_tokens}")
+            print(f"[+] Grouped into {len(grouped_docs)} files for summarization")
 
-            if estimated_tokens <= max_token_threshold and len(retrieved_docs) <= 10:
-                # For small datasets, use raw document content directly
-                print("[+] Using raw document content (small dataset)")
-                final_context = combined_content
-            else:
-                # For large datasets, batch and summarize
-                print("[+] Batching and summarizing (large dataset)")
-                batches = list(batch_documents(retrieved_docs, batch_size=batch_size))
-                summaries = []
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    futures = [executor.submit(summarize_batch, batch) for batch in batches]
-                    for future in futures:
-                        summaries.append(future.result())
+            mini_summaries = []
 
-                # Combine and summarize all batch summaries
-                combined_summary = "\n".join(summaries)
-                final_context = summarize_context(combined_summary)
-                print(f"[+] Summarized {len(batches)} batches and reduced to final context")
+            # Summarize each file separately
+            for vector_id, docs in grouped_docs.items():
+                combined_text = "\n".join([d["content"] for d in docs])
+                est_tokens = estimate_tokens(combined_text)
+
+                if est_tokens <= max_token_threshold:
+                    # Directly use combined content if small enough
+                    mini_summary = summarize_context(combined_text)
+                else:
+                    # For huge files, split and batch summarize
+                    batches = list(batch_documents(
+                        [LangChainDocument(page_content=d["content"]) for d in docs],
+                        batch_size=batch_size
+                    ))
+                    batch_summaries = []
+                    with ThreadPoolExecutor(max_workers=5) as executor:
+                        futures = [executor.submit(summarize_batch, batch) for batch in batches]
+                        for future in futures:
+                            batch_summaries.append(future.result())
+
+                    combined_summary = "\n".join(batch_summaries)
+                    mini_summary = summarize_context(combined_summary)
+
+                mini_summaries.append(mini_summary)
+
+            # Combine all file summaries
+            combined_context = "\n\n".join(mini_summaries)
+            final_context = combined_context
+
+            print(f"[+] Combined {len(mini_summaries)} file summaries into final context")
 
         else:
-            print("[+] Using default Qdrant collection retriever")
+            print("[+] Using default retriever context (no specific documents)")
             retriever = qdrant.as_retriever(search_kwargs={"k": 5})
             retrieved_docs = retriever.get_relevant_documents(query)
             final_context = "\n".join([doc.page_content for doc in retrieved_docs])
@@ -801,7 +891,7 @@ def ask_question(query: str, source_type: str, documents: Optional[List[dict]] =
         end = time.time()
         print(f"[+] Retrieved and processed context in: {end - start:.2f} seconds")
 
-        # Final QA
+        # QA Chain
         prompt_template = PromptTemplate(
             template="""{system_prompt}\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:""",
             input_variables=["system_prompt", "context", "question"]
@@ -966,3 +1056,62 @@ def delete_documents_by_vector_id(vector_id: str) -> list:
     except Exception as e:
         print(f"[!] Error deleting documents from Qdrant: {e}")
         return False
+    
+
+class EnrichedIngestMixin:
+    """
+    Call this from your existing IngestAPIView after extracting file text.
+    Adds auto-summary and metadata enrichment to Document
+    """
+    def enrich_document(self, document_obj, file_text, file_ext):
+        try:
+            summary = summarize_context(file_text[:3000])
+            metadata = extract_metadata(file_text, file_ext)
+
+            document_obj.summary = summary
+            document_obj.keywords = metadata
+            document_obj.save()
+
+            print(f"[+] Document enriched with summary and keywords")
+        except Exception as e:
+            print(f"[!] Failed to enrich document: {e}")
+
+# In utils.py (add this to utils file)
+def retrieve_documents_by_vector_ids(vector_ids: List[str]) -> list:
+    from qdrant_client.http.models import Filter, FieldCondition
+    from .utils import qdrant_client, collection_name
+
+    filter = Filter(
+        must=[
+            FieldCondition(
+                key="metadata.vector_id",
+                match=MatchAny(any=vector_ids)
+            )
+        ]
+    )
+
+    print("[+] Searching documents for multiple vector_ids:", vector_ids)
+
+    try:
+        search_result = qdrant_client.scroll(
+            collection_name=collection_name,
+            scroll_filter=filter,
+            limit=300,
+            with_vectors=False,
+            with_payload=True
+        )
+
+        if not search_result[0]:
+            return []
+
+        documents = []
+        for record in search_result[0]:
+            doc_content = record.payload.get("page_content", "")
+            doc_metadata = record.payload.get("metadata", {})
+            documents.append({"content": doc_content, "metadata": doc_metadata})
+
+        return documents
+
+    except Exception as e:
+        print("[!] Multi-vector retrieval error:", str(e))
+        return []

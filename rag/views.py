@@ -13,7 +13,7 @@ from .serializers import *
 from django.contrib.auth import authenticate, get_user_model
 from django.shortcuts import get_object_or_404
 from rest_framework.parsers import MultiPartParser, FormParser
-from .utils import extract_text_from_file, insert_document_to_vectorstore, ask_question, retrieve_documents_by_vector_id,delete_documents_by_vector_id
+from .utils import extract_text_from_file, insert_document_to_vectorstore, ask_question, retrieve_documents_by_vector_id,delete_documents_by_vector_id, retrieve_documents_by_vector_ids
 import tempfile
 from pathlib import Path
 import time
@@ -286,3 +286,64 @@ def chat_history(request, token,vector_id):
         if chat:
             chat.delete()
         return Response({'message': 'Chat history cleared.'})
+    
+
+class MultiFileAskAPIView(APIView):
+    """
+    Accepts a question and list of vector_ids to perform multi-file RAG
+    """
+    def post(self, request, token):
+        auth_token = get_object_or_404(AuthToken, token_key=token)
+        user = auth_token.user
+        data = request.data
+
+        question = data.get("question")
+        vector_ids = data.get("vector_ids", [])
+
+        if not question:
+            return Response({"error": "Question is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not vector_ids:
+            return Response({"error": "At least one vector_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            documents = retrieve_documents_by_vector_ids(vector_ids)
+            if not documents:
+                return Response({"error": "No documents found for the provided vector_ids."}, status=404)
+
+            answer = ask_question(question, source_type="file", documents=documents)
+            return Response({"answer": answer}, status=200)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+class GlobalAskAPIView(APIView):
+    """
+    Accepts a question and answers it based on *all documents* uploaded by the current user
+    """
+    def post(self, request, token):
+        auth_token = get_object_or_404(AuthToken, token_key=token)
+        user = auth_token.user
+        data = request.data
+
+        question = data.get("question")
+        if not question:
+            return Response({"error": "Question is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Fetch all vector_ids for the user's tenant
+            vector_ids = list(Document.objects.filter(tenant=user.tenant).values_list("vector_id", flat=True))
+            if not vector_ids:
+                return Response({"error": "No documents found for this tenant."}, status=404)
+
+            documents = retrieve_documents_by_vector_ids(vector_ids)
+            if not documents:
+                return Response({"error": "No documents found in Qdrant."}, status=404)
+
+            answer = ask_question(question, source_type="file", documents=documents)
+            return Response({"answer": answer}, status=200)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
