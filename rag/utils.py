@@ -255,12 +255,40 @@ def extract_metadata(data, file_ext: str) -> dict:
 # ----------- Specific Extractors -----------
 
 # 1. PDF
+# def extract_text_from_pdf(path):
+#     try:
+#         text = pdfminer_extract_text(path)
+
+#         if not text.strip():
+#             # If text is empty even after extraction, maybe password protected
+#             raise ValueError("The PDF appears to be empty or password-protected.")
+
+#     except Exception as e:
+#         print(f"[!] PDF extraction failed: {e}")
+#         raise ValueError("Failed to extract text from PDF. It might be password-protected or corrupted.") from e
+
+#     return text.strip()
 def extract_text_from_pdf(path):
     try:
+        # Check encryption first
+        reader = PdfReader(path)
+        if reader.is_encrypted:
+            raise ValueError("The uploaded PDF is password-protected. Please upload an unlocked PDF.")
+
+        # If not encrypted, continue extraction
         text = pdfminer_extract_text(path)
+
+        if not text.strip():
+            raise ValueError("The PDF appears to be empty or unreadable after extraction.")
+
+    except ValueError as ve:
+        print(f"[!] PDF Extraction error: {ve}")
+        raise ve
+
     except Exception as e:
-        print(f"[!] PDFMiner failed: {e}")
-        text = ""
+        print(f"[!] Unexpected error during PDF extraction: {e}")
+        raise ValueError("Failed to extract text from PDF. It might be password-protected, empty, or corrupted.") from e
+
     return text.strip()
 
 # 2. DOCX

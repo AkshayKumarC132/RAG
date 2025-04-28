@@ -32,3 +32,12 @@ class ChatHistory(models.Model):
 
     def __str__(self):
         return self.vector_id
+
+class DocumentAlert(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='alerts')
+    keyword = models.CharField(max_length=255)
+    snippet = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Alert on {self.document.title}: {self.keyword}"

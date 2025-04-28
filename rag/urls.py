@@ -18,4 +18,7 @@ urlpatterns = [
 
     path('multifile-ask/<str:token>/', views.MultiFileAskAPIView.as_view(), name='multifile-ask'),
     path('global-ask/<str:token>/', views.GlobalAskAPIView.as_view(), name='global-ask'),
+
+    path('document-alerts/<str:vector_id>/', views.get_document_alerts, name='document-alerts'),
+
 ]

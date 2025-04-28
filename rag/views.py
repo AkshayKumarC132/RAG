@@ -1,7 +1,7 @@
 # rag/views.py
 
 from django.http import JsonResponse
-from .models import Tenant,Document, ChatHistory
+from .models import Tenant,Document, ChatHistory, DocumentAlert
 import json
 from rest_framework.decorators import api_view
 from rest_framework import status
@@ -112,6 +112,9 @@ class IngestAPIView(generics.CreateAPIView):
                 extracted_text = extract_text_from_file(tmp_path, uploaded_file.name)
                 file_ext = Path(uploaded_file.name).suffix.lower()
 
+                if not extracted_text.strip():
+                    return Response({"error": "No text could be extracted. Please check if the file is password-protected or empty."}, status=status.HTTP_400_BAD_REQUEST)
+
                 start = time.time()
 
                 insert_document_to_vectorstore(extracted_text, source_type, file_ext, vector_id)
@@ -128,12 +131,19 @@ class IngestAPIView(generics.CreateAPIView):
                 )
                 document.save()
 
+                # Enrich document
                 self.enrich_document(document, extracted_text, file_ext)
-
+                
+                # Detect alerts
+                self.detect_alerts(document, extracted_text)
+                
                 return Response({"message": "File ingested and stored successfully.",
                                  "file name" : uploaded_file.name,
                                  "document_id": document.id,
                                  "vector_id": vector_id}, status=status.HTTP_200_OK)
+            except ValueError as ve:
+                return Response({"error": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
+            
             except Exception as e:
                 return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
             # finally:
@@ -169,6 +179,52 @@ class IngestAPIView(generics.CreateAPIView):
 
         except Exception as e:
             print(f"[!] Failed to enrich document: {e}")
+
+    def detect_alerts(self, document_obj, file_text):
+        try:
+            alert_keywords = [
+                # Contract & Expiry
+                "contract expiry", "contract end date", "renewal deadline", "service termination", "expiry notice",
+                # Payments
+                "payment due", "payment overdue", "invoice overdue", "late fee", "unpaid invoice", "outstanding balance", "collection notice",
+                # Legal Risks
+                "breach of contract", "penalty clause", "legal action", "non-compliance", "lawsuit", "settlement",
+                # Deadlines
+                "submission deadline", "due date", "project deadline", "final notice", "critical timeline",
+                # Financial
+                "advance payment", "refund request", "debit note", "credit note", "balance payable",
+                # Risk Specific
+                "termination for cause", "default notice", "breach penalty", "financial exposure",
+                # Communication
+                "no response received", "pending approval", "awaiting confirmation",
+                # Supply Chain
+                "shipment delay", "logistics issue", "supply disruption",
+                # Tax / Regulatory
+                "tax penalty", "compliance audit", "regulatory fine",
+                # Partner/Vendor Risks
+                "partner dispute", "vendor breach", "service level failure",
+
+                # Additional keywords from the provided document
+                "invoice", "payment summary", "total amount", "booking fees", "ride charge",
+                "cancellation policy", "cancellation fees", "cancellation notice", "cancellation confirmation",
+            ]
+
+            file_text_lower = file_text.lower()
+
+            for keyword in alert_keywords:
+                if keyword in file_text_lower:
+                    idx = file_text_lower.find(keyword)
+                    snippet = file_text[max(0, idx-100): idx+100]  # Extract 100 chars before and after
+                    DocumentAlert.objects.create(
+                        document=document_obj,
+                        keyword=keyword,
+                        snippet=snippet
+                    )
+                    print(f"[+] Alert created for '{keyword}' in document {document_obj.title}")
+
+        except Exception as e:
+            print(f"[!] Failed to detect alerts: {e}")
+
 
 class AskAPIView(generics.CreateAPIView):
     serializer_class = AskQuestionSerializer
@@ -370,3 +426,22 @@ class GlobalAskAPIView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
+@api_view(['GET'])
+def get_document_alerts(request, vector_id):
+    try:
+        document = Document.objects.get(vector_id=vector_id)
+        alerts = document.alerts.all()
+
+        data = [{
+            "keyword": alert.keyword,
+            "snippet": alert.snippet,
+            "created_at": alert.created_at
+        } for alert in alerts]
+
+        return Response({"alerts": data}, status=status.HTTP_200_OK)
+
+    except Document.DoesNotExist:
+        return Response({"error": "Document not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        print(f"[!] Error fetching alerts: {e}")
+        return Response({"error": "Server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
