@@ -21,4 +21,6 @@ urlpatterns = [
 
     path('document-alerts/<str:vector_id>/', views.get_document_alerts, name='document-alerts'),
 
+    path('chat-history-multifile/<str:token>/', views.chat_history_multifile, name='chat-history-multifile'),
+
 ]

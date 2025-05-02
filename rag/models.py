@@ -41,3 +41,16 @@ class DocumentAlert(models.Model):
 
     def __str__(self):
         return f"Alert on {self.document.title}: {self.keyword}"
+
+
+class MultiFileChatSession(models.Model):
+    session_id = models.CharField(unique=True, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    vector_ids = models.JSONField(default=list)  # list of vector_id strings
+    vector_hash = models.CharField(max_length=128, null=True, blank=True)  # 👈 add this
+    history = models.JSONField(default=list)     # [{"question": "...", "answer": "..."}]
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Session {self.session_id}"

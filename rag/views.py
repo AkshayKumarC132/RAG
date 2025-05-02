@@ -1,7 +1,7 @@
 # rag/views.py
 
 from django.http import JsonResponse
-from .models import Tenant,Document, ChatHistory, DocumentAlert
+from .models import Tenant,Document, ChatHistory, DocumentAlert, MultiFileChatSession
 import json
 from rest_framework.decorators import api_view
 from rest_framework import status
@@ -19,6 +19,7 @@ from pathlib import Path
 import time
 import logging
 import uuid
+import hashlib
 
 logging.basicConfig(filename="app.log",level=logging.INFO)
 
@@ -445,3 +446,72 @@ def get_document_alerts(request, vector_id):
     except Exception as e:
         print(f"[!] Error fetching alerts: {e}")
         return Response({"error": "Server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def compute_vector_hash(vector_ids: list[str]) -> str:
+    sorted_ids = sorted(vector_ids)
+    return hashlib.sha256(",".join(sorted_ids).encode()).hexdigest()
+
+
+# This endpoint is for saving and retrieving chat history for multiple files
+@api_view(['POST', 'GET', 'DELETE'])
+def chat_history_multifile(request, token):
+    auth_token = get_object_or_404(AuthToken, token_key=token)
+    user = auth_token.user
+
+    if not user:
+        return Response({'error': 'User not authenticated.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    if request.method == 'POST':
+        vector_ids = request.data.get('vector_ids', [])
+        history = request.data.get('history', [])
+        
+        if not vector_ids:
+            return Response({'error': 'vector_ids are required.'}, status=400)
+
+        vector_hash = compute_vector_hash(vector_ids)
+        # Try to find existing session for this hash
+        session = MultiFileChatSession.objects.filter(user=user, vector_hash=vector_hash).first()
+
+        if session:
+            # Only update history if it was provided and not empty
+            if history:
+                session.history = history
+                session.save()
+            is_new = False
+        else:
+            session = MultiFileChatSession.objects.create(
+                user=user,
+                session_id=str(uuid.uuid4()),  # Generate a unique session ID
+                vector_ids=vector_ids,
+                vector_hash=vector_hash,
+                history=history or []
+            )
+            is_new = True
+        return Response({'message': 'Multi-file chat history saved.', 'session_id': str(session.session_id),'is_new': is_new})
+
+    elif request.method == 'GET':
+        session_id = request.query_params.get('session_id')
+        if not session_id:
+            return Response({'error': 'session_id query parameter is required.'}, status=400)
+
+        try:
+            session = MultiFileChatSession.objects.get(session_id=session_id, user=user)
+        except MultiFileChatSession.DoesNotExist:
+            return Response({'error': 'Session not found.'}, status=404)
+
+        return Response({
+            'session_id': str(session.session_id),
+            'vector_ids': session.vector_ids,
+            'history': session.history
+        })
+    elif request.method == 'DELETE':
+        session_id = request.query_params.get('session_id')
+        if not session_id:
+            return Response({'error': 'session_id query parameter is required.'}, status=400)
+
+        try:
+            session = MultiFileChatSession.objects.get(session_id=session_id, user=user)
+            session.delete()
+            return Response({'message': 'Multi-file chat session deleted.'})
+        except MultiFileChatSession.DoesNotExist:
+            return Response({'error': 'Session not found.'}, status=404)
