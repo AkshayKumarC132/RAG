@@ -23,9 +23,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-xqc4^!iqry$*2p3p@*19opb&%&e2g51ap5tc^wy2%@671nv*t0'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = ['127.0.0.1','localhost','*','0.0.0.0']
+ALLOWED_HOSTS = ['127.0.0.1','localhost','*','0.0.0.0','172.16.17.65','172.16.17.66','103.116.37.147','103.116.37.148']
 
 
 # Application definition
@@ -171,9 +171,17 @@ CORS_ORIGIN_WISHLIST = [
     'http://127.0.0.1:5000',
     'http://127.0.0.1:8000',
     '*',
+    "http://172.16.17.65",
+    "http://172.16.17.66",
+    "http://103.116.37.147",
+    "http://103.116.37.148",
 ]
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:4200",
     "http://127.0.0.1:4200",
+    "http://172.16.17.65",
+    "http://172.16.17.66",
+    "http://103.116.37.147",
+    "http://103.116.37.148"
 ]
