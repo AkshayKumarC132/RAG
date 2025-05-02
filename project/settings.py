@@ -23,9 +23,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-xqc4^!iqry$*2p3p@*19opb&%&e2g51ap5tc^wy2%@671nv*t0'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['127.0.0.1','localhost','*','0.0.0.0','172.16.17.65','172.16.17.66','103.116.37.147','103.116.37.148']
 
 
 # Application definition
@@ -37,9 +37,11 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
     'rag',
     'rest_framework',
     'knox',
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
@@ -50,6 +52,9 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+
+    #CORS MiddleWare
+    'corsheaders.middleware.CorsMiddleware',
 ]
 
 REST_FRAMEWORK = {
@@ -132,3 +137,51 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 OPENAI_API_KEY = 'sk-...'  # Replace with your actual OpenAI API key
+
+SECURE_CROSS_ORIGIN_OPENER_POLICY=None
+
+# Value determines whether the server allows cookies in the cross-site HTTP requests
+CORS_ALLOW_CREDENTIALS = True
+
+# Methods allowed for CORS
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'OPTIONS',
+    'PATCH',
+    'GET',
+    'POST',
+    'PUT',  
+]
+
+# Non-standard headers allowed in the request
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+
+CORS_ORIGIN_WISHLIST = [
+    'http://localhost:4200',
+    'http://127.0.0.1:5000',
+    'http://127.0.0.1:8000',
+    '*',
+    "http://172.16.17.65",
+    "http://172.16.17.66",
+    "http://103.116.37.147",
+    "http://103.116.37.148",
+]
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:4200",
+    "http://127.0.0.1:4200",
+    "http://172.16.17.65",
+    "http://172.16.17.66",
+    "http://103.116.37.147",
+    "http://103.116.37.148"
+]

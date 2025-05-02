@@ -25,3 +25,10 @@ __pycache__/
 *.ckpt
 *.onnx
 *.pb
+
+.qodo
+codex*
+rag_sdk*
+*.codex
+*codex*
+.eev
