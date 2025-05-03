@@ -79,8 +79,8 @@ class LoginSerializer(serializers.Serializer):
 
 
 class IngestDocumentSerializer(serializers.Serializer):
-    # text = serializers.CharField()
-    file = serializers.FileField(required=True)
+    file = serializers.FileField(required=False)
+    s3_file_url = serializers.URLField(required=False)
 
 class AskQuestionSerializer(serializers.Serializer):
     question = serializers.CharField()

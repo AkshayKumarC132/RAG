@@ -20,8 +20,8 @@ import time
 import logging
 import uuid
 import hashlib
-
-logging.basicConfig(filename="app.log",level=logging.INFO)
+import requests
+# logging.basicConfig(filename="app.log",level=logging.INFO)
 
 User = get_user_model()
 
@@ -91,27 +91,47 @@ class IngestAPIView(generics.CreateAPIView):
         user = auth_token.user
         serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
-            uploaded_file = serializer.validated_data['file']
+            uploaded_file = serializer.validated_data.get('file', None)
+            s3_file_url = serializer.validated_data.get('s3_file_url', None)
+
             source_type = "file"  # or dynamically decide if needed
 
+            if not uploaded_file and not s3_file_url:
+                return Response({"error": "No input file provided. Please upload a local file or provide an S3 file URL."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Decide which source to use
+            if uploaded_file:
+                file_name = uploaded_file.name
+                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file_name).suffix) as tmp:
+                    for chunk in uploaded_file.chunks():
+                        tmp.write(chunk)
+                    tmp_path = tmp.name
+                print(f"[+] Local file uploaded and saved at: {tmp_path}")
+
+            elif s3_file_url:
+                file_name = s3_file_url.split("/")[-1]
+                response = requests.get(s3_file_url)
+                if response.status_code != 200:
+                    return Response({"error": "Failed to download file from S3 URL."}, status=status.HTTP_400_BAD_REQUEST)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file_name).suffix) as tmp:
+                    print(f"[+] Downloading file from S3 URL: {s3_file_url}")
+                    print(f"[+] Saving file as: {file_name}")
+                    tmp.write(response.content)
+                    print(f"[+] File downloaded successfully.", tmp)
+                    tmp_path = tmp.name
+
+                print(f"[+] File downloaded from S3 and saved at: {tmp_path}")
+                
             # Generate a unique vector_id
             vector_id = str(uuid.uuid4())
 
-            
-            # Save to a temp file
-            # with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp:
-                for chunk in uploaded_file.chunks():
-                    tmp.write(chunk)
-                tmp_path = tmp.name
 
-            print(f"[+] Temporary file created at: {tmp_path}")
             try:
                 # Get tenant from the user's token
                 tenant = user.tenant  # Assuming each user has one tenant
                 
-                extracted_text = extract_text_from_file(tmp_path, uploaded_file.name)
-                file_ext = Path(uploaded_file.name).suffix.lower()
+                extracted_text = extract_text_from_file(tmp_path, file_name)
+                file_ext = Path(file_name).suffix.lower()
 
                 if not extracted_text.strip():
                     return Response({"error": "No text could be extracted. Please check if the file is password-protected or empty."}, status=status.HTTP_400_BAD_REQUEST)
@@ -126,7 +146,7 @@ class IngestAPIView(generics.CreateAPIView):
                 # Save the document in the Document model
                 document = Document(
                     tenant=tenant,
-                    title=uploaded_file.name,
+                    title=file_name,
                     content=extracted_text,
                     vector_id=vector_id
                 )
@@ -139,7 +159,7 @@ class IngestAPIView(generics.CreateAPIView):
                 self.detect_alerts(document, extracted_text)
                 
                 return Response({"message": "File ingested and stored successfully.",
-                                 "file name" : uploaded_file.name,
+                                 "file name" : file_name,
                                  "document_id": document.id,
                                  "vector_id": vector_id}, status=status.HTTP_200_OK)
             except ValueError as ve:
@@ -155,7 +175,7 @@ class IngestAPIView(generics.CreateAPIView):
     def get(self, request, token):
         auth_token = get_object_or_404(AuthToken, token_key=token)
         user = auth_token.user
-        documents = Document.objects.filter(tenant=user.tenant).defer('vector_id').values()
+        documents = Document.objects.filter(tenant=user.tenant).defer('vector_id').values().order_by('-uploaded_at')
         if not documents:
             return Response({"message": "No documents found."}, status=status.HTTP_404_NOT_FOUND)
         return Response({"documents": list(documents)}, status=status.HTTP_200_OK)
