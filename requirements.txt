@@ -30,3 +30,8 @@ langchain-core==0.3.52
 langchain-community==0.3.21
 langchain-text-splitters==0.3.8
 qdrant-client==1.13.3
+
+moviepy
+SpeechRecognition
+pydub
+openai-whisper

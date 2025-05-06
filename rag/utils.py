@@ -30,8 +30,16 @@ from qdrant_client.http.models import Filter, FieldCondition, MatchValue
 from typing import List, Optional
 
 from langchain.chains.llm import LLMChain
-
+from .models import Document as DocumentModel
 # model = SentenceTransformer('all-MiniLM-L6-v2')
+import os
+import subprocess
+import platform
+import speech_recognition as sr
+from pydub import AudioSegment
+import tempfile
+from moviepy import VideoFileClip
+
 
 nlp = spacy.load("en_core_web_sm")  # For NER
 
@@ -161,6 +169,15 @@ def extract_text_from_file(file_path: str, original_file_name: str) -> str:
     
     elif ext in [".ini", ".cfg"]:  # Adding support for configuration files
         extracted_data = extract_text_from_ini(file_path)
+
+    elif ext == ".ppt":  # Legacy PowerPoint support
+        extracted_data = extract_text_from_ppt(file_path)
+
+    elif ext in [".mp4", ".avi", ".mov"]:  # Video support
+        extracted_data = extract_text_from_video(file_path)
+
+    elif ext in [".mp3", ".wav", ".m4a"]:  # Audio support
+        extracted_data = extract_text_from_audio(file_path)
     
     else:
         raise ValueError("Unsupported file type!")
@@ -173,6 +190,31 @@ def extract_text_from_file(file_path: str, original_file_name: str) -> str:
         print(f"[!] Error: Extracted data from {original_file_name} is of an unexpected type: {type(extracted_data)}")
     print(extracted_data, '\n\n Extracted Data \n\n')
     return extracted_data
+
+def extract_text_from_video(file_path: str) -> str:
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio:
+            video = VideoFileClip(file_path)
+            audio = video.audio
+            audio.write_audiofile(tmp_audio.name, logger=None)
+
+            return extract_text_from_audio(tmp_audio.name)
+    except Exception as e:
+        print(f"[!] Error processing video: {e}")
+        return ""
+    # finally:
+    #     if os.path.exists(tmp_audio.name):
+    #         os.unlink(tmp_audio.name)
+
+import whisper
+def extract_text_from_audio(file_path: str) -> str:
+    try:
+        model = whisper.load_model("base")  # or "small", "medium", "large"
+        result = model.transcribe(file_path, language="en")  # or let it auto-detect
+        return result["text"]
+    except Exception as e:
+        print(f"[!] Whisper failed: {e}")
+        return ""
 
 # ----------- Dynamic Metadata Extraction Logic -----------
 
@@ -327,6 +369,31 @@ def extract_text_from_pptx(path):
 
     return text.strip()
 
+def extract_text_from_ppt(file_path: str) -> str:
+    pptx_path = file_path + "x"  # Temporary file path for converted pptx
+    try:
+        if platform.system() == "Windows":
+            import comtypes.client
+            powerpoint = comtypes.client.CreateObject("Powerpoint.Application")
+            powerpoint.Visible = 1
+            ppt = powerpoint.Presentations.Open(file_path, WithWindow=False)
+            ppt.SaveAs(pptx_path, 24)  # 24 = pptx
+            ppt.Close()
+            powerpoint.Quit()
+        else:
+            # For Linux: Convert using unoconv or libreoffice
+            subprocess.run(["libreoffice", "--headless", "--convert-to", "pptx", file_path, "--outdir", os.path.dirname(file_path)], check=True)
+
+        # Now extract text from .pptx
+        return extract_text_from_pptx(pptx_path)
+
+    except Exception as e:
+        print(f"[!] Error converting or reading PPT: {e}")
+        return ""
+
+    finally:
+        if os.path.exists(pptx_path):
+            os.remove(pptx_path)
 # 4. Excel/CSV
 def extract_text_from_excel_or_csv(path):
     ext = Path(path).suffix.lower()
@@ -1092,7 +1159,7 @@ def retrieve_documents_by_vector_id(vector_id: str) -> list:
             ]
         )
 
-        print("[+] Searching for documents with vector_id:", vector_id)
+        print(f"[+] Searching for documents with vector_id: {vector_id}")
 
         # Query Qdrant for documents matching the vector_id
         search_result = qdrant_client.scroll(
@@ -1103,10 +1170,57 @@ def retrieve_documents_by_vector_id(vector_id: str) -> list:
             with_payload=True
         )
 
-        print("[+] Search result:", search_result)
+        print(f"[+] Search result: {search_result}")
         if not search_result[0]:  # Check if any records were found
-            print("[!] No documents found for the given vector_id.")
-            return []
+            print(f"[!] No documents found for vector_id: {vector_id}. Attempting re-ingestion...")
+            
+            # Fetch document from the database
+            document = DocumentModel.objects.filter(vector_id=vector_id).first()
+            if not document:
+                print(f"[!] No document found in the database for vector_id: {vector_id}")
+                return []
+
+            # Re-ingest the document into Qdrant
+            print(f"[+] Document found in database. Re-ingesting document into Qdrant for vector_id: {vector_id}")
+            file_ext = Path(document.title).suffix.lower()
+            source_type = "file"  # This can be dynamic if required
+
+            # Check if the content is in JSON format (optional handling)
+            try:
+                # Try to load the document content as JSON
+                json_content = json.loads(document.content)
+                print("[+] Detected JSON format. Preparing to parse...")
+                document_content = json_content  # Assuming it's a list of chunks or other data
+            except json.JSONDecodeError as e:
+                print(f"[!] JSON decode error: {e}. Treating content as plain text.")
+                document_content = document.content  # Treat as plain text or process differently
+
+            # Manually chunk the text content into smaller pieces for ingestion
+            chunk_size = 1000  # Set a size based on your use case
+            text_chunks = [document_content[i:i+chunk_size] for i in range(0, len(document_content), chunk_size)]
+
+            print(f"[+] Splitting text into {len(text_chunks)} chunks...")
+            
+            # Insert chunks into Qdrant
+            if text_chunks:
+                for chunk in text_chunks:
+                    insert_document_to_vectorstore(chunk, source_type, file_ext, vector_id)
+                    print(f"[+] Inserted chunk into Qdrant.")
+
+            print(f"[+] Re-ingestion complete. Retrying retrieval...")
+
+            # Retry the search after re-ingestion
+            search_result = qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=filter,
+                limit=100,  # Adjust based on expected number of chunks
+                with_vectors=False,
+                with_payload=True
+            )
+
+            if not search_result[0]:
+                print(f"[!] Re-ingestion completed, but still no documents found for vector_id: {vector_id}")
+                return []
 
         # Extract documents from the search result
         documents = []

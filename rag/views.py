@@ -167,8 +167,11 @@ class IngestAPIView(generics.CreateAPIView):
             
             except Exception as e:
                 return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-            # finally:
-            #     Path(tmp_path).unlink(missing_ok=True)  # Clean up temp file
+            finally:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)  # Clean up temp file
+                except Exception as e:
+                    print(f"[!] Error deleting temp file: {e}")
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
