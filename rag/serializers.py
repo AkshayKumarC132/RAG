@@ -84,10 +84,6 @@ class IngestDocumentSerializer(serializers.Serializer):
     file = serializers.FileField(required=False)
     s3_file_url = serializers.URLField(required=False)
 
-    def validate(self, data):
-        if not data.get('file') and not data.get('s3_file_url'):
-            raise serializers.ValidationError("Either file or s3_file_url must be provided.")
-        return data
 
 class AskQuestionSerializer(serializers.Serializer):
     question = serializers.CharField()
