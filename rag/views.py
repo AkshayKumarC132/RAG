@@ -35,7 +35,7 @@ class ProtectedView(APIView):
         return Response({
             'user': UserSerializer(user).data,
             'token': token,
-            'expiry': auth_token.expiry
+            # 'expiry': auth_token.expiry
         }, status=status.HTTP_200_OK)
 
 class RegisterAPI(generics.CreateAPIView):
@@ -70,7 +70,7 @@ class LoginView(generics.CreateAPIView):
 
         return Response({
             'token': token_instance.token_key,
-            'expiry': token_instance.expiry,
+            # 'expiry': token_instance.expiry,
             'user': user_data
         }, status=status.HTTP_200_OK)
 
