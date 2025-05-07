@@ -36,3 +36,5 @@ SpeechRecognition
 pydub
 openai-whisper
 psycopg2-binary
+
+comtypes
