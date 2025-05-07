@@ -109,7 +109,10 @@ class IngestAPIView(generics.CreateAPIView):
                 print(f"[+] Local file uploaded and saved at: {tmp_path}")
 
             elif s3_file_url:
-                file_name = s3_file_url.split("/")[-1]
+                from urllib.parse import urlparse
+                parsed_url = urlparse(s3_file_url)
+                file_name = parsed_url.path.split("/")[-1]
+                
                 response = requests.get(s3_file_url)
                 if response.status_code != 200:
                     return Response({"error": "Failed to download file from S3 URL."}, status=status.HTTP_400_BAD_REQUEST)
