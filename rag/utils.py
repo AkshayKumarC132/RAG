@@ -38,7 +38,7 @@ import platform
 import speech_recognition as sr
 from pydub import AudioSegment
 import tempfile
-from moviepy import VideoFileClip
+from moviepy.editor import VideoFileClip
 
 
 nlp = spacy.load("en_core_web_sm")  # For NER
@@ -47,7 +47,7 @@ nlp = spacy.load("en_core_web_sm")  # For NER
 embedding_model = OpenAIEmbeddings(api_key=settings.OPENAI_API_KEY)
 llm = ChatOpenAI(api_key=settings.OPENAI_API_KEY,temperature=0)
 
-# Qdrant initialization
+# Connect to Qdrant
 qdrant_client = QdrantClient(host="localhost", port=6333)
 collection_name = "xamplify_docs"
 
@@ -83,8 +83,8 @@ create_qdrant_collection_if_not_exists()
 
 # Qdrant
 qdrant = QdrantVectorStore(
-    client=QdrantClient(host="localhost", port=6333),
-    collection_name="xamplify_docs",
+    client=qdrant_client,
+    collection_name=collection_name,
     embedding=embedding_model,
 )
 
@@ -372,6 +372,7 @@ def extract_text_from_pptx(path):
 def extract_text_from_ppt(file_path: str) -> str:
     pptx_path = file_path + "x"  # Temporary file path for converted pptx
     try:
+        print("[+] Converting PPT to PPTX...",platform.system())
         if platform.system() == "Windows":
             import comtypes.client
             powerpoint = comtypes.client.CreateObject("Powerpoint.Application")

@@ -181,7 +181,7 @@ class IngestAPIView(generics.CreateAPIView):
         documents = Document.objects.filter(tenant=user.tenant).defer('vector_id').values().order_by('-uploaded_at')
         if not documents:
             return Response({"message": "No documents found."}, status=status.HTTP_404_NOT_FOUND)
-        return Response({"documents": list(documents)}, status=status.HTTP_200_OK)
+        return Response(DocumentSerializer(documents, many=True).data, status=status.HTTP_200_OK)
 
 
     def enrich_document(self,document_obj, file_text, file_ext):
@@ -254,12 +254,14 @@ class AskAPIView(generics.CreateAPIView):
     serializer_class = AskQuestionSerializer
     def post(self, request, token):
         auth_token = get_object_or_404(AuthToken, token_key=token)
+        user = auth_token.user
         # user = auth_token.user
         serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
             question = serializer.validated_data['question']
             vector_id = serializer.validated_data.get('vector_id')  # Optional field in serializer
             chat_history = serializer.validated_data.get('chat_history')  # Optional field in serializer
+            user_identifier = serializer.validated_data['user_identifier']
             source_type = "file"  # or dynamic based on your design
 
             if not question:
@@ -267,7 +269,12 @@ class AskAPIView(generics.CreateAPIView):
                     {"error": "A question must be provided."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
+            # Validate document access
+            if vector_id:
+                document = get_object_or_404(Document, vector_id=vector_id, tenant=user.tenant)
+                if user_identifier != user.email:  # Admin uses email as identifier
+                    if not DocumentAccess.objects.filter(document=document, user_identifier=user_identifier).exists():
+                        return Response({'error': 'No access to this document.'}, status=status.HTTP_403_FORBIDDEN)
             try:
                 if vector_id:
                     # Retrieve documents by vector_id
@@ -277,6 +284,16 @@ class AskAPIView(generics.CreateAPIView):
                         return Response({"error": "No documents found for the given vector_id."}, status=status.HTTP_404_NOT_FOUND)
                     answer = ask_question_for_single_document(question, source_type=source_type, documents=documents, chat_history=chat_history)
                     # return Response({"vector_id": vector_id, "documents": documents}, status=status.HTTP_200_OK)
+                    # Update chat history
+                    chat, _ = ChatHistory.objects.get_or_create(
+                        vector_id=vector_id,
+                        user_identifier=user_identifier,
+                        tenant=user.tenant,
+                        defaults={'history': []}
+                    )
+                    chat.history.append({"role": "user", "content": question})
+                    chat.history.append({"role": "assistant", "content": answer})
+                    chat.save()
                 else:
                     answer = ask_question(question, source_type,chat_history)
                 return Response({"answer": answer}, status=status.HTTP_200_OK)
@@ -291,68 +308,25 @@ class RetrieveByVectorIdAPIView(APIView):
         auth_token = get_object_or_404(AuthToken, token_key=token)
         user = auth_token.user
 
-        try:
-            doc = Document.objects.get(vector_id=vector_id, tenant=user.tenant)
-            if not doc:
-                return Response({"error": "Document not found."}, status=status.HTTP_404_NOT_FOUND)
-            # Retrieve documents from Qdrant by vector_id
-            documents = retrieve_documents_by_vector_id(vector_id)
-
-            if not documents:
-                return Response({"error": "No documents found for the given vector_id."}, status=status.HTTP_404_NOT_FOUND)
-
-            return Response({
-                "vector_id": vector_id,
-                "documents": documents
-            }, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        document = get_object_or_404(Document, vector_id=vector_id, tenant=user.tenant)
+        documents = retrieve_documents_by_vector_id(vector_id)
+        if not documents:
+            return Response({"error": "No documents found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"vector_id": vector_id,"documents": documents}, status=status.HTTP_200_OK)
 
 
 class DeleteDocumentAPIView(APIView):
     def delete(self, request, token, vector_id):
-        # Validate authentication token
         auth_token = get_object_or_404(AuthToken, token_key=token)
         user = auth_token.user
+        document = get_object_or_404(Document, vector_id=vector_id, tenant=user.tenant)
 
         try:
-            # Find the document in the database
-            document = Document.objects.filter(vector_id=vector_id, tenant=user.tenant).first()
-            if not document:
-                print(f"[!] No document found with vector_id: {vector_id} for tenant: {user.tenant.id}")
-                return Response(
-                    {"error": "No document found with the given vector_id."},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            is_deleted = delete_documents_by_vector_id(vector_id)
-            print("[+] Deleting document from vector store...", is_deleted)
-            if not is_deleted:
-                print(f"[!] Failed to delete document with vector_id: {vector_id} from vector store")
-                return Response(
-                    {"error": "Failed to delete document from vector store."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # Delete from Django database
-            document_title = document.title
+            delete_documents_by_vector_id(vector_id)
             document.delete()
-            print(f"[+] Successfully deleted document '{document_title}' from database")
-
-            return Response(
-                {
-                    "message": f"Document '{document_title}' with vector_id {vector_id} deleted successfully.",
-                    "vector_id": vector_id
-                },
-                status=status.HTTP_200_OK
-            )
-
+            return Response({"message": "Document deleted successfully."}, status=status.HTTP_200_OK)
         except Exception as e:
-            print(f"[!] Error deleting document with vector_id {vector_id}: {e}")
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
 
 @api_view(['GET', 'POST', 'DELETE'])
@@ -391,84 +365,111 @@ def chat_history(request, token,vector_id):
         return Response({'message': 'Chat history cleared.'})
     
 
-class MultiFileAskAPIView(APIView):
-    """
-    Accepts a question and list of vector_ids to perform multi-file RAG
-    """
+class MultiFileAskAPIView(generics.CreateAPIView):
+    serializer_class = AskQuestionSerializer
+
     def post(self, request, token):
         auth_token = get_object_or_404(AuthToken, token_key=token)
         user = auth_token.user
-        data = request.data
+        serializer = self.serializer_class(data=request.data)
+        if serializer.is_valid():
+            question = serializer.validated_data['question']
+            vector_ids = request.data.get('vector_ids', [])
+            chat_history = serializer.validated_data.get('chat_history')
+            user_identifier = serializer.validated_data['user_identifier']
 
-        question = data.get("question")
-        vector_ids = data.get("vector_ids", [])
-
-        if not question:
-            return Response({"error": "Question is required."}, status=status.HTTP_400_BAD_REQUEST)
-        if not vector_ids:
-            return Response({"error": "At least one vector_id is required."}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            documents = retrieve_documents_by_vector_ids(vector_ids)
-            if not documents:
-                return Response({"error": "No documents found for the provided vector_ids."}, status=404)
-
-            answer = ask_question(question, source_type="file", documents=documents)
-            return Response({"answer": answer}, status=200)
-
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
-
-
-class GlobalAskAPIView(APIView):
-    """
-    Accepts a question and answers it based on *all documents* uploaded by the current user
-    """
-    def post(self, request, token):
-        auth_token = get_object_or_404(AuthToken, token_key=token)
-        user = auth_token.user
-        data = request.data
-
-        question = data.get("question")
-        if not question:
-            return Response({"error": "Question is required."}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            # Fetch all vector_ids for the user's tenant
-            vector_ids = list(Document.objects.filter(tenant=user.tenant).values_list("vector_id", flat=True))
+            if not question:
+                return Response({"error": "A question must be provided."}, status=status.HTTP_400_BAD_REQUEST)
             if not vector_ids:
-                return Response({"error": "No documents found for this tenant."}, status=404)
+                return Response({"error": "vector_ids are required."}, status=status.HTTP_400_BAD_REQUEST)
 
-            documents = retrieve_documents_by_vector_ids(vector_ids)
-            if not documents:
-                return Response({"error": "No documents found in Qdrant."}, status=404)
+            # Validate document access
+            for vector_id in vector_ids:
+                document = get_object_or_404(Document, vector_id=vector_id, tenant=user.tenant)
+                if user_identifier != user.email:  # Admin uses email as identifier
+                    if not DocumentAccess.objects.filter(document=document, user_identifier=user_identifier).exists():
+                        return Response({'error': f'No access to document {vector_id}.'}, status=status.HTTP_403_FORBIDDEN)
 
-            answer = ask_question(question, source_type="file", documents=documents)
-            return Response({"answer": answer}, status=200)
+            try:
+                documents = retrieve_documents_by_vector_ids(vector_ids)
+                if not documents:
+                    return Response({"error": "No documents found for the given vector_ids."}, status=status.HTTP_404_NOT_FOUND)
 
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
+                answer = ask_question(
+                    question,
+                    source_type="file",
+                    documents=documents,
+                    chat_history=chat_history
+                )
+
+                # Update or create session
+                sorted_vector_ids = sorted(vector_ids)
+                vector_hash = hashlib.sha256(json.dumps(sorted_vector_ids).encode('utf-8')).hexdigest()
+                session, created = MultiFileChatSession.objects.get_or_create(
+                    vector_hash=vector_hash,
+                    user_identifier=user_identifier,
+                    tenant=user.tenant,
+                    defaults={
+                        'session_id': str(uuid.uuid4()),
+                        'user': user,
+                        'vector_ids': vector_ids,
+                        'history': [{'question': question, 'answer': answer}]
+                    }
+                )
+
+                if not created:
+                    session.history.append({'question': question, 'answer': answer})
+                    session.save()
+
+                return Response({
+                    'session_id': session.session_id,
+                    'answer': answer
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class GlobalAskAPIView(generics.CreateAPIView):
+    serializer_class = AskQuestionSerializer
+
+    def post(self, request, token):
+        auth_token = get_object_or_404(AuthToken, token_key=token)
+        user = auth_token.user
+        serializer = self.serializer_class(data=request.data)
+        if serializer.is_valid():
+            question = serializer.validated_data['question']
+            chat_history = serializer.validated_data.get('chat_history')
+            user_identifier = serializer.validated_data['user_identifier']
+
+            if not question:
+                return Response({"error": "A question must be provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                documents = Document.objects.filter(tenant=user.tenant)
+                vector_ids = [doc.vector_id for doc in documents]
+                if not vector_ids:
+                    return Response({"error": "No documents found for this tenant."}, status=status.HTTP_404_NOT_FOUND)
+
+                retrieved_docs = retrieve_documents_by_vector_ids(vector_ids)
+                answer = ask_question(
+                    question,
+                    source_type="file",
+                    documents=retrieved_docs,
+                    chat_history=chat_history
+                )
+
+                return Response({"answer": answer}, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET'])
 def get_document_alerts(request, vector_id):
-    try:
-        document = Document.objects.get(vector_id=vector_id)
-        alerts = document.alerts.all()
-
-        data = [{
-            "keyword": alert.keyword,
-            "snippet": alert.snippet,
-            "created_at": alert.created_at
-        } for alert in alerts]
-
-        return Response({"alerts": data}, status=status.HTTP_200_OK)
-
-    except Document.DoesNotExist:
-        return Response({"error": "Document not found"}, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        print(f"[!] Error fetching alerts: {e}")
-        return Response({"error": "Server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    document = get_object_or_404(Document, vector_id=vector_id)
+    alerts = DocumentAlert.objects.filter(document=document)
+    alert_data = [{"keyword": alert.keyword, "snippet": alert.snippet, "created_at": alert.created_at} for alert in alerts]
+    return Response({"alerts": alert_data}, status=status.HTTP_200_OK)
 
 def compute_vector_hash(vector_ids: list[str]) -> str:
     sorted_ids = sorted(vector_ids)
@@ -476,65 +477,215 @@ def compute_vector_hash(vector_ids: list[str]) -> str:
 
 
 # This endpoint is for saving and retrieving chat history for multiple files
-@api_view(['POST', 'GET', 'DELETE'])
+@api_view(['GET', 'POST', 'DELETE'])
+def chat_history(request, token, vector_id):
+    auth_token = get_object_or_404(AuthToken, token_key=token)
+    user = auth_token.user
+    user_identifier = request.query_params.get('user_identifier') or request.data.get('user_identifier')
+
+    if not user_identifier:
+        return Response({'error': 'user_identifier is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Validate document access
+    document = get_object_or_404(Document, vector_id=vector_id, tenant=user.tenant)
+    if user_identifier != user.email:  # Admin uses email as identifier
+        if not DocumentAccess.objects.filter(document=document, user_identifier=user_identifier).exists():
+            return Response({'error': 'No access to this document.'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        chat = ChatHistory.objects.get(vector_id=vector_id, user_identifier=user_identifier, tenant=user.tenant)
+    except ChatHistory.DoesNotExist:
+        chat = None
+
+    if request.method == 'GET':
+        if chat:
+            return Response({'history': chat.history}, status=status.HTTP_200_OK)
+        return Response({'history': []}, status=status.HTTP_200_OK)
+
+    elif request.method == 'POST':
+        history = request.data.get('history', [])
+        if chat:
+            chat.history = history
+            chat.save()
+        else:
+            chat = ChatHistory.objects.create(
+                vector_id=vector_id,
+                user_identifier=user_identifier,
+                history=history,
+                tenant=user.tenant
+            )
+        return Response({'message': 'Chat history saved.'}, status=status.HTTP_200_OK)
+
+    elif request.method == 'DELETE':
+        if chat:
+            chat.delete()
+            return Response({'message': 'Chat history cleared.'}, status=status.HTTP_200_OK)
+        return Response({'message': 'No chat history found.'}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST', 'DELETE'])
 def chat_history_multifile(request, token):
     auth_token = get_object_or_404(AuthToken, token_key=token)
     user = auth_token.user
+    user_identifier = request.query_params.get('user_identifier') or request.data.get('user_identifier')
 
-    if not user:
-        return Response({'error': 'User not authenticated.'}, status=status.HTTP_401_UNAUTHORIZED)
+    if not user_identifier:
+        return Response({'error': 'user_identifier is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
     if request.method == 'POST':
         vector_ids = request.data.get('vector_ids', [])
         history = request.data.get('history', [])
-        
+
         if not vector_ids:
-            return Response({'error': 'vector_ids are required.'}, status=400)
+            return Response({'error': 'vector_ids are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        vector_hash = compute_vector_hash(vector_ids)
-        # Try to find existing session for this hash
-        session = MultiFileChatSession.objects.filter(user=user, vector_hash=vector_hash).first()
+        # Validate document access
+        for vector_id in vector_ids:
+            document = get_object_or_404(Document, vector_id=vector_id, tenant=user.tenant)
+            if user_identifier != user.email:  # Admin uses email as identifier
+                if not DocumentAccess.objects.filter(document=document, user_identifier=user_identifier).exists():
+                    return Response({'error': f'No access to document {vector_id}.'}, status=status.HTTP_403_FORBIDDEN)
 
-        if session:
-            # Only update history if it was provided and not empty
-            if history:
-                session.history = history
-                session.save()
-            is_new = False
-        else:
-            session = MultiFileChatSession.objects.create(
-                user=user,
-                session_id=str(uuid.uuid4()),  # Generate a unique session ID
-                vector_ids=vector_ids,
-                vector_hash=vector_hash,
-                history=history or []
-            )
-            is_new = True
-        return Response({'message': 'Multi-file chat history saved.', 'session_id': str(session.session_id),'is_new': is_new})
+        # Generate vector_hash
+        sorted_vector_ids = sorted(vector_ids)
+        vector_hash = hashlib.sha256(json.dumps(sorted_vector_ids).encode('utf-8')).hexdigest()
+
+        # Create or update session
+        session, created = MultiFileChatSession.objects.get_or_create(
+            vector_hash=vector_hash,
+            user_identifier=user_identifier,
+            tenant=user.tenant,
+            defaults={
+                'session_id': str(uuid.uuid4()),
+                'user': user,
+                'vector_ids': vector_ids,
+                'history': history
+            }
+        )
+
+        if not created:
+            session.vector_ids = vector_ids
+            session.history = history
+            session.save()
+
+        return Response({'session_id': session.session_id, 'message': 'Session saved.'}, status=status.HTTP_200_OK)
 
     elif request.method == 'GET':
         session_id = request.query_params.get('session_id')
         if not session_id:
-            return Response({'error': 'session_id query parameter is required.'}, status=400)
+            return Response({'error': 'session_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            session = MultiFileChatSession.objects.get(session_id=session_id, user=user)
+            session = MultiFileChatSession.objects.get(
+                session_id=session_id,
+                user_identifier=user_identifier,
+                tenant=user.tenant
+            )
+            return Response(MultiFileChatSessionSerializer(session).data, status=status.HTTP_200_OK)
         except MultiFileChatSession.DoesNotExist:
-            return Response({'error': 'Session not found.'}, status=404)
+            return Response({'error': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        return Response({
-            'session_id': str(session.session_id),
-            'vector_ids': session.vector_ids,
-            'history': session.history
-        })
     elif request.method == 'DELETE':
-        session_id = request.query_params.get('session_id')
+        session_id = request.data.get('session_id')
         if not session_id:
-            return Response({'error': 'session_id query parameter is required.'}, status=400)
+            return Response({'error': 'session_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            session = MultiFileChatSession.objects.get(session_id=session_id, user=user)
+            session = MultiFileChatSession.objects.get(
+                session_id=session_id,
+                user_identifier=user_identifier,
+                tenant=user.tenant
+            )
             session.delete()
-            return Response({'message': 'Multi-file chat session deleted.'})
+            return Response({'message': 'Session deleted.'}, status=status.HTTP_200_OK)
         except MultiFileChatSession.DoesNotExist:
-            return Response({'error': 'Session not found.'}, status=404)
+            return Response({'error': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+class ShareDocumentAPIView(APIView):
+    # permission_classes = [IsAdmin]  # Uncomment when RBAC is implemented
+    def post(self, request, token):
+        auth_token = get_object_or_404(AuthToken, token_key=token)
+        user = auth_token.user
+        print(user)
+
+        vector_id = request.data.get('vector_id')
+        user_identifier = request.data.get('user_identifier')  # e.g., TM email
+
+        if not vector_id or not user_identifier:
+            return Response({"error": "vector_id and user_identifier are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        document = get_object_or_404(Document, vector_id=vector_id, tenant=user.tenant)
+
+        access, created = DocumentAccess.objects.get_or_create(
+            document=document,
+            user_identifier=user_identifier,
+            defaults={'granted_by': user}
+        )
+
+        if not created:
+            return Response({"message": "Access already granted."}, status=status.HTTP_200_OK)
+
+        return Response({"message": f"Access granted to {user_identifier} for document {vector_id}."}, status=status.HTTP_201_CREATED)
+    
+    def get(self, request, token):
+        auth_token = get_object_or_404(AuthToken, token_key=token)
+        user = auth_token.user
+
+        user_identifier = request.data.get('user_identifier')  # e.g., TM email
+
+        if not user_identifier:
+            return Response({"error": "user_identifier is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Query shared documents
+        access_records = DocumentAccess.objects.filter(
+            user_identifier=user_identifier,
+            document__tenant=user.tenant
+        )
+        documents = [access.document for access in access_records]
+        
+        if not documents:
+            return Response({"message": "No shared documents found.", "shared_documents": []}, status=status.HTTP_200_OK)
+
+        serializer = DocumentSerializer(documents, many=True)
+        return Response({
+            "user_identifier": user_identifier,
+            "shared_documents": serializer.data
+            }, status=status.HTTP_200_OK)
+
+
+class RemoveDocumentAccessAPIView(generics.DestroyAPIView):
+
+    def put(self, request, token):
+        auth_token = get_object_or_404(AuthToken, token_key=token)
+        user = auth_token.user
+        vector_id = request.data.get('vector_id')
+        user_identifier = request.data.get('user_identifier')
+
+        if not vector_id or not user_identifier:
+            return Response({"error": "vector_id and user_identifier are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate document access
+        document = get_object_or_404(Document, vector_id=vector_id, tenant=user.tenant)
+
+        try:
+            access = DocumentAccess.objects.get(document=document, user_identifier=user_identifier)
+            access.delete()
+            # Update MultiFileChatSession to remove vector_id
+            self.update_multi_file_session(user_identifier, vector_id, user.tenant)
+            return Response({"message": "Access removed successfully for document {vector_id}."}, status=status.HTTP_200_OK)
+        except DocumentAccess.DoesNotExist:
+            return Response({"error": "Access does not exist."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    def update_multi_file_session(self,user_identifier, vector_id, tenant):
+        """Remove vector_id from MultiFileChatSession and update vector_hash."""
+        sessions = MultiFileChatSession.objects.filter(user_identifier=user_identifier, tenant=tenant)
+        for session in sessions:
+            if vector_id in session.vector_ids:
+                session.vector_ids.remove(vector_id)
+                if session.vector_ids:  # Update hash if vector_ids is not empty
+                    session.vector_hash = hashlib.sha256(
+                        ''.join(sorted(session.vector_ids)).encode('utf-8')
+                    ).hexdigest()
+                else:  # Clear hash if no vector_ids remain
+                    session.vector_hash = None
+                session.save()

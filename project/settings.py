@@ -91,7 +91,23 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'rag.sqlite3',
-    }
+    },
+    'development': {
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': 'rag_development',
+        'USER': 'postgres',
+        'PASSWORD': 'QP3HeJel62BPzPaq07uETezy',
+        'HOST': 'e-commerce.cj3oddyv0bsk.us-west-1.rds.amazonaws.com',
+        'PORT': '5432',
+    },
+    'Production': {
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': 'rag_production',
+        'USER': 'postgres',
+        'PASSWORD': 'QP3HeJel62BPzPaq07uETezy',
+        'HOST': 'e-commerce.cj3oddyv0bsk.us-west-1.rds.amazonaws.com',
+        'PORT': '5432',
+    },
 }
 
 
