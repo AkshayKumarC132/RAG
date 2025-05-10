@@ -92,9 +92,9 @@ DATABASES = {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'rag.sqlite3',
     },
-    'development': {
+    'Dev': {
         'ENGINE': 'django.db.backends.postgresql_psycopg2',
-        'NAME': 'rag_development',
+        'NAME': 'rag_dev',
         'USER': 'postgres',
         'PASSWORD': 'QP3HeJel62BPzPaq07uETezy',
         'HOST': 'e-commerce.cj3oddyv0bsk.us-west-1.rds.amazonaws.com',
