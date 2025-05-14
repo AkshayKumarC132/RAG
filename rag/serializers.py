@@ -123,7 +123,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         return value
 
 class AssistantSerializer(serializers.ModelSerializer):
-    vector_store_id = serializers.CharField(write_only=True)
+    vector_store_id = serializers.CharField(write_only=True, required=False)
 
     class Meta:
         model = Assistant
@@ -133,13 +133,6 @@ class AssistantSerializer(serializers.ModelSerializer):
     def validate_name(self, value):
         if not value.strip():
             raise serializers.ValidationError("Assistant name cannot be empty.")
-        return value
-
-    def validate_vector_store_id(self, value):
-        try:
-            VectorStore.objects.get(id=value)
-        except VectorStore.DoesNotExist:
-            raise serializers.ValidationError("Invalid vector_store_id.")
         return value
 
 class ThreadSerializer(serializers.ModelSerializer):
@@ -157,17 +150,12 @@ class ThreadSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Invalid vector_store_id.")
         return value
 
-    # def create(self, validated_data):
-    #     vector_store_id = validated_data.pop('vector_store_id')
-    #     vector_store = VectorStore.objects.get(id=vector_store_id)
-    #     return Thread.objects.create(vector_store=vector_store, **validated_data)
-
 class MessageSerializer(serializers.ModelSerializer):
     thread_id = serializers.CharField(write_only=True)
 
     class Meta:
         model = Message
-        fields = ['id', 'thread_id', 'role', 'content', 'created_at']
+        fields = ['id', 'thread_id', 'content', 'created_at']
         read_only_fields = ['id', 'created_at']
 
     def validate_content(self, value):
@@ -182,18 +170,13 @@ class MessageSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Invalid thread_id.")
         return value
 
-    # def create(self, validated_data):
-    #     thread_id = validated_data.pop('thread_id')
-    #     thread = Thread.objects.get(id=thread_id)
-    #     return Message.objects.create(thread=thread, **validated_data)
-
 class RunSerializer(serializers.ModelSerializer):
     thread_id = serializers.CharField(write_only=True)
     assistant_id = serializers.CharField(write_only=True)
 
     class Meta:
         model = Run
-        fields = ['id', 'thread_id', 'assistant_id', 'status', 'created_at', 'completed_at']
+        fields = ['id', 'thread_id', 'status', 'assistant_id', 'created_at', 'completed_at']
         read_only_fields = ['id', 'created_at', 'completed_at']
 
     def validate_thread_id(self, value):
@@ -210,17 +193,11 @@ class RunSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Invalid assistant_id.")
         return value
 
-    # def create(self, validated_data):
-    #     thread_id = validated_data.pop('thread_id')
-    #     assistant_id = validated_data.pop('assistant_id')
-    #     thread = Thread.objects.get(id=thread_id)
-    #     assistant = Assistant.objects.get(id=assistant_id)
-    #     return Run.objects.create(thread=thread, assistant=assistant, **validated_data)
-
 class DocumentAccessSerializer(serializers.ModelSerializer):
     document_id = serializers.CharField(write_only=True)
     vector_store_id = serializers.CharField(write_only=True)
-    granted_by = serializers.PrimaryKeyRelatedField(read_only=True)  # Make it read-only
+    granted_by = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = DocumentAccess
         fields = ['id', 'document_id', 'vector_store_id', 'granted_by', 'granted_at']

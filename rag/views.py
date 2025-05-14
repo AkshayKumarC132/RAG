@@ -1,5 +1,3 @@
-# rag/views.py
-
 from rest_framework import status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -7,18 +5,28 @@ from knox.models import AuthToken
 from django.shortcuts import get_object_or_404
 from .models import Tenant, Document, VectorStore, Assistant, Thread, Message, Run, DocumentAlert, DocumentAccess, OpenAIKey
 from .serializers import *
-from .utils import process_file, extract_text_from_file, insert_document_to_vectorstore, ask_question, retrieve_documents_by_vector_id, delete_documents_by_vector_id, enrich_document, detect_alerts, get_authenticated_user
+from .utils import (
+    process_file, extract_text_from_file, insert_document_to_vectorstore,
+    ask_question, retrieve_documents_by_vector_id, delete_documents_by_vector_id,
+    enrich_document, detect_alerts, get_authenticated_user
+)
 import threading
 from datetime import datetime
 from django.contrib.auth import get_user_model
 from pathlib import Path
+import logging
 
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 class TokenAuthenticatedMixin:
     def initial(self, request, *args, **kwargs):
-        self.user = get_authenticated_user(kwargs.get('token'))
-        super().initial(request, *args, **kwargs)
+        try:
+            self.user = get_authenticated_user(kwargs.get('token'))
+            super().initial(request, *args, **kwargs)
+        except ValueError as e:
+            logger.error(f"Authentication failed: {e}")
+            return Response({"error": str(e)}, status=status.HTTP_401_UNAUTHORIZED)
 
 # Tenant CRUD
 class TenantCreateAPIView(generics.CreateAPIView):
@@ -34,7 +42,6 @@ class TenantRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Tenant.objects.all()
     lookup_field = 'id'
 
-# User CRUD
 class RegisterAPI(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = RegisterSerializer
@@ -58,6 +65,9 @@ class LoginView(generics.CreateAPIView):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data['user']
+        if not hasattr(user, 'tenant') or user.tenant is None:
+            logger.error(f"User {user.username} has no associated tenant")
+            return Response({"error": "User has no associated tenant"}, status=status.HTTP_403_FORBIDDEN)
         token_instance, token = AuthToken.objects.create(user)
         return Response({
             'token': token_instance.token_key,
@@ -66,9 +76,13 @@ class LoginView(generics.CreateAPIView):
 
 class LogoutView(TokenAuthenticatedMixin, APIView):
     def post(self, request, token=None, format=None):
-        auth_token = get_object_or_404(AuthToken, token_key=token)
-        auth_token.delete()
-        return Response({'message': 'Logged out successfully.'}, status=status.HTTP_204_NO_CONTENT)
+        try:
+            auth_token = get_object_or_404(AuthToken, token_key=token)
+            auth_token.delete()
+            return Response({'message': 'Logged out successfully.'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Error logging out: {e}")
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 class ProtectedView(TokenAuthenticatedMixin, APIView):
     def get(self, request, token):
@@ -116,20 +130,26 @@ class IngestAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
     serializer_class = IngestDocumentSerializer
 
     def post(self, request, token):
-        serializer = self.serializer_class(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        uploaded_file = serializer.validated_data.get('file')
-        s3_file_url = serializer.validated_data.get('s3_file_url')
-        vector_store_id = serializer.validated_data['vector_store_id']
-
-        vector_store = get_object_or_404(VectorStore, id=vector_store_id, tenant=self.user.tenant)
-
         try:
+            serializer = self.serializer_class(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            uploaded_file = serializer.validated_data.get('file')
+            s3_file_url = serializer.validated_data.get('s3_file_url')
+            vector_store_id = serializer.validated_data['vector_store_id']
+
+            # Validate tenant
+            if not hasattr(self.user, 'tenant') or self.user.tenant is None:
+                logger.error(f"User {self.user.username} has no associated tenant")
+                return Response({"error": "User has no associated tenant"}, status=status.HTTP_403_FORBIDDEN)
+
+            vector_store = get_object_or_404(VectorStore, id=vector_store_id, tenant=self.user.tenant)
+
             tmp_path, file_name = process_file(uploaded_file, s3_file_url)
             extracted_text = extract_text_from_file(tmp_path, file_name)
             file_ext = Path(file_name).suffix.lower()
 
             if not extracted_text.strip():
+                logger.warning(f"No text extracted from file {file_name}")
                 return Response({"error": "No text could be extracted from the file."}, status=status.HTTP_400_BAD_REQUEST)
 
             document = Document(
@@ -152,12 +172,14 @@ class IngestAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
             enrich_document(document, extracted_text, file_ext)
             detect_alerts(document, extracted_text)
 
+            logger.info(f"Successfully ingested document {document.id}: {file_name}")
             return Response({
                 "message": "File ingested successfully.",
                 "file_name": file_name,
                 "document_id": document.id,
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
+            logger.error(f"Error ingesting document: {e}")
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         finally:
             if 'tmp_path' in locals():
@@ -187,8 +209,10 @@ class DocumentRetrieveUpdateDestroyAPIView(TokenAuthenticatedMixin, generics.Ret
 class AssistantCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
     serializer_class = AssistantSerializer
     def perform_create(self, serializer):
-        vector_store_id = serializer.validated_data['vector_store_id']
-        vector_store = get_object_or_404(VectorStore, id=vector_store_id, tenant=self.user.tenant)
+        vector_store_id = serializer.validated_data.get('vector_store_id')
+        vector_store = None
+        if vector_store_id:
+            vector_store = get_object_or_404(VectorStore, id=vector_store_id, tenant=self.user.tenant)
         serializer.save(tenant=self.user.tenant, vector_store=vector_store, creator=self.user)
 
 class AssistantListAPIView(TokenAuthenticatedMixin, generics.ListAPIView):
@@ -202,7 +226,6 @@ class AssistantRetrieveUpdateDestroyAPIView(TokenAuthenticatedMixin, generics.Re
     def get_queryset(self):
         return Assistant.objects.filter(tenant=self.user.tenant)
 
-# Thread CRUD
 class ThreadCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
     serializer_class = ThreadSerializer
     def perform_create(self, serializer):
@@ -223,17 +246,20 @@ class ThreadRetrieveUpdateDestroyAPIView(TokenAuthenticatedMixin, generics.Retri
 
 class ThreadMessagesAPIView(TokenAuthenticatedMixin, APIView):
     def get(self, request, token, thread_id):
-        thread = get_object_or_404(Thread, id=thread_id, tenant=self.user.tenant)
-        messages = thread.messages.order_by('created_at')
-        return Response(MessageSerializer(messages, many=True).data, status=status.HTTP_200_OK)
+        try:
+            thread = get_object_or_404(Thread, id=thread_id, tenant=self.user.tenant)
+            messages = thread.messages.order_by('created_at')
+            return Response(MessageSerializer(messages, many=True).data, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Error retrieving thread messages: {e}")
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-# Message CRUD
 class MessageCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
     serializer_class = MessageSerializer
     def perform_create(self, serializer):
         thread_id = serializer.validated_data['thread_id']
         thread = get_object_or_404(Thread, id=thread_id, tenant=self.user.tenant)
-        serializer.save(thread=thread)
+        serializer.save(thread=thread, role = 'user')
 
 class MessageListAPIView(TokenAuthenticatedMixin, generics.ListAPIView):
     serializer_class = MessageSerializer
@@ -251,16 +277,22 @@ class MessageRetrieveUpdateDestroyAPIView(TokenAuthenticatedMixin, generics.Retr
     def get_queryset(self):
         return Message.objects.filter(thread__tenant=self.user.tenant)
 
-# Run CRUD
 class RunCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
     serializer_class = RunSerializer
+
     def perform_create(self, serializer):
-        thread_id = serializer.validated_data['thread_id']
-        assistant_id = serializer.validated_data['assistant_id']
-        thread = get_object_or_404(Thread, id=thread_id, tenant=self.user.tenant)
-        assistant = get_object_or_404(Assistant, id=assistant_id, tenant=self.user.tenant)
-        run = serializer.save(thread=thread, assistant=assistant)
-        threading.Thread(target=self.process_run, args=(run,)).start()
+        try:
+            thread_id = serializer.validated_data['thread_id']
+            assistant_id = serializer.validated_data['assistant_id']
+            thread = get_object_or_404(Thread, id=thread_id, tenant=self.user.tenant)
+            assistant = get_object_or_404(Assistant, id=assistant_id, tenant=self.user.tenant)
+            run = serializer.save(thread=thread, assistant=assistant, status='queued')
+            threading.Thread(target=self.process_run, args=(run,)).start()
+            logger.info(f"Started background processing for run {run.id}")
+            return run
+        except Exception as e:
+            logger.error(f"Error creating run: {e}")
+            raise
 
     def process_run(self, run):
         try:
@@ -273,18 +305,41 @@ class RunCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
             if not user_messages:
                 run.status = 'failed'
                 run.save()
+                logger.warning(f"Run {run.id} failed: No user messages found")
                 return
             query = user_messages[-1]
-            documents = retrieve_documents_by_vector_id(str(assistant.vector_store.id), user=self.user, collection_name=self.user.tenant.collection_name)
-            answer = ask_question(query, "file", documents=documents, user=self.user)
+            vector_store = assistant.vector_store
+            if not vector_store:
+                # Use thread's vector store or query available vector stores
+                vector_store = thread.vector_store
+                if not vector_store:
+                    vector_store = VectorStore.objects.filter(tenant=self.user.tenant).first()
+                    if not vector_store:
+                        run.status = 'failed'
+                        run.save()
+                        logger.warning(f"Run {run.id} failed: No vector store available")
+                        return
+            documents = retrieve_documents_by_vector_id(
+                str(vector_store.id),
+                user=self.user,
+                collection_name=self.user.tenant.collection_name
+            )
+            answer = ask_question(
+                query,
+                "file",
+                documents=documents,
+                user=self.user,
+                collection_name=self.user.tenant.collection_name
+            )
             Message.objects.create(thread=thread, role='assistant', content=answer)
             run.status = 'completed'
             run.completed_at = datetime.now()
             run.save()
+            logger.info(f"Run {run.id} completed successfully")
         except Exception as e:
             run.status = 'failed'
             run.save()
-            print(f"[!] Run processing failed: {e}")
+            logger.error(f"Run {run.id} processing failed: {e}")
 
 class RunListAPIView(TokenAuthenticatedMixin, generics.ListAPIView):
     serializer_class = RunSerializer
@@ -302,7 +357,7 @@ class RunRetrieveUpdateDestroyAPIView(TokenAuthenticatedMixin, generics.Retrieve
     def get_queryset(self):
         return Run.objects.filter(thread__tenant=self.user.tenant)
 
-# DocumentAlert CRUD
+
 class DocumentAlertCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
     serializer_class = DocumentAlertSerializer
     def perform_create(self, serializer):
@@ -326,7 +381,6 @@ class DocumentAlertRetrieveUpdateDestroyAPIView(TokenAuthenticatedMixin, generic
     def get_queryset(self):
         return DocumentAlert.objects.filter(document__tenant=self.user.tenant)
 
-# DocumentAccess CRUD
 class DocumentAccessCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
     serializer_class = DocumentAccessSerializer
     def perform_create(self, serializer):

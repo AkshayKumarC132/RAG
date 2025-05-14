@@ -201,3 +201,6 @@ CORS_ALLOWED_ORIGINS = [
     "http://103.116.37.147",
     "http://103.116.37.148"
 ]
+
+QDRANT_HOST = 'localhost'
+QDRANT_PORT = '6333'

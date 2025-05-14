@@ -35,23 +35,23 @@ urlpatterns = [
     # Vector Store
     path('vector-store/<str:token>/', VectorStoreCreateAPIView.as_view(), name='vector-store-create'),
     path('vector-store/<str:token>/list/', VectorStoreListAPIView.as_view(), name='vector-store-list'),
-    path('vector-store/<str:token>/<uuid:id>/', VectorStoreRetrieveUpdateDestroyAPIView.as_view(), name='vector-store-detail'),
+    path('vector-store/<str:token>/<str:id>/', VectorStoreRetrieveUpdateDestroyAPIView.as_view(), name='vector-store-detail'),
 
     # Document
     path('document/<str:token>/ingest/', IngestAPIView.as_view(), name='document-ingest'),
     path('document/<str:token>/list/', DocumentListAPIView.as_view(), name='document-list'),
-    path('document/<str:token>/<uuid:id>/', DocumentRetrieveUpdateDestroyAPIView.as_view(), name='document-detail'),
+    path('document/<str:token>/<str:id>/', DocumentRetrieveUpdateDestroyAPIView.as_view(), name='document-detail'),
 
     # Assistant
     path('assistant/<str:token>/', AssistantCreateAPIView.as_view(), name='assistant-create'),
     path('assistant/<str:token>/list/', AssistantListAPIView.as_view(), name='assistant-list'),
-    path('assistant/<str:token>/<uuid:id>/', AssistantRetrieveUpdateDestroyAPIView.as_view(), name='assistant-detail'),
+    path('assistant/<str:token>/<str:id>/', AssistantRetrieveUpdateDestroyAPIView.as_view(), name='assistant-detail'),
 
     # Thread
     path('thread/<str:token>/', ThreadCreateAPIView.as_view(), name='thread-create'),
     path('thread/<str:token>/list/', ThreadListAPIView.as_view(), name='thread-list'),
-    path('thread/<str:token>/<uuid:id>/', ThreadRetrieveUpdateDestroyAPIView.as_view(), name='thread-detail'),
-    path('thread/<str:token>/<uuid:id>/messages/', ThreadMessagesAPIView.as_view(), name='thread-messages'),
+    path('thread/<str:token>/<str:id>/', ThreadRetrieveUpdateDestroyAPIView.as_view(), name='thread-detail'),
+    path('thread/<str:token>/<str:id>/messages/', ThreadMessagesAPIView.as_view(), name='thread-messages'),
 
     # Message
     path('message/<str:token>/', MessageCreateAPIView.as_view(), name='message-create'),
@@ -61,7 +61,7 @@ urlpatterns = [
     # Run
     path('run/<str:token>/', RunCreateAPIView.as_view(), name='run-create'),
     path('run/<str:token>/list/', RunListAPIView.as_view(), name='run-list'),
-    path('run/<str:token>/<uuid:id>/', RunRetrieveUpdateDestroyAPIView.as_view(), name='run-detail'),
+    path('run/<str:token>/<str:id>/', RunRetrieveUpdateDestroyAPIView.as_view(), name='run-detail'),
 
     # Document Access
     path('document-access/<str:token>/', DocumentAccessCreateAPIView.as_view(), name='document-access-create'),

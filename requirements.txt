@@ -38,3 +38,6 @@ openai-whisper
 psycopg2-binary
 
 comtypes
+rank_bm25
+whisper
+nltk

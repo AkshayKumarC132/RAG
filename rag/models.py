@@ -95,7 +95,7 @@ class Assistant(models.Model):
     id = models.CharField(primary_key=True, max_length=50, default=generate_prefixed_uuid_assistant, editable=False)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="assistants")
     name = models.CharField(max_length=255)
-    vector_store = models.ForeignKey(VectorStore, on_delete=models.CASCADE, related_name="assistants")
+    vector_store = models.ForeignKey(VectorStore, on_delete=models.CASCADE, related_name="assistants", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     creator = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_assistants", null=True)
 
