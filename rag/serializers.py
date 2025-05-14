@@ -158,7 +158,7 @@ class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
         fields = ['id', 'thread_id', 'role', 'content', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'role', 'created_at']
 
     def validate_content(self, value):
         if not value.strip():
