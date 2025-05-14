@@ -13,7 +13,7 @@ from .views import (
     RunCreateAPIView, RunListAPIView, RunRetrieveUpdateDestroyAPIView,
     DocumentAccessCreateAPIView, DocumentAccessListAPIView, DocumentAccessRetrieveUpdateDestroyAPIView,
     DocumentAlertCreateAPIView, DocumentAlertListAPIView, DocumentAlertRetrieveUpdateDestroyAPIView,
-    OpenAIKeyCreateAPIView, OpenAIKeyListAPIView, OpenAIKeyRetrieveUpdateDestroyAPIView,
+    OpenAIKeyCreateAPIView, OpenAIKeyListAPIView, OpenAIKeyRetrieveUpdateDestroyAPIView, DocumentAccessRemoveAPIView
 )
 
 urlpatterns = [
@@ -51,7 +51,7 @@ urlpatterns = [
     path('thread/<str:token>/', ThreadCreateAPIView.as_view(), name='thread-create'),
     path('thread/<str:token>/list/', ThreadListAPIView.as_view(), name='thread-list'),
     path('thread/<str:token>/<str:id>/', ThreadRetrieveUpdateDestroyAPIView.as_view(), name='thread-detail'),
-    path('thread/<str:token>/<str:id>/messages/', ThreadMessagesAPIView.as_view(), name='thread-messages'),
+    path('thread/<str:token>/<str:thread_id>/messages/', ThreadMessagesAPIView.as_view(), name='thread-messages'),
 
     # Message
     path('message/<str:token>/', MessageCreateAPIView.as_view(), name='message-create'),
@@ -67,6 +67,9 @@ urlpatterns = [
     path('document-access/<str:token>/', DocumentAccessCreateAPIView.as_view(), name='document-access-create'),
     path('document-access/<str:token>/list/', DocumentAccessListAPIView.as_view(), name='document-access-list'),
     path('document-access/<str:token>/<int:id>/', DocumentAccessRetrieveUpdateDestroyAPIView.as_view(), name='document-access-detail'),
+
+    # Document Access Remove
+    path('document-access/remove/<str:token>/', DocumentAccessRemoveAPIView.as_view(), name='document-access-remove'),
 
     # Document Alert
     path('document-alert/<str:token>/', DocumentAlertCreateAPIView.as_view(), name='document-alert-create'),

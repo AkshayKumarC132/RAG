@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from langchain.prompts import PromptTemplate
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Dict
-from .models import Document as DocumentModel, OpenAIKey, DocumentAlert, Tenant
+from .models import Document, OpenAIKey, DocumentAlert, Tenant, VectorStore, DocumentAccess
 from knox.models import AuthToken
 from django.shortcuts import get_object_or_404
 import os
@@ -41,7 +41,9 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 import time
 from langchain.chains.llm import LLMChain
-
+from bs4 import BeautifulSoup
+import yaml
+import configparser
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -73,7 +75,6 @@ def get_authenticated_user(token: str):
     try:
         auth_token = get_object_or_404(AuthToken, token_key=token)
         user = auth_token.user
-        # Validate tenant association
         if not hasattr(user, 'tenant') or user.tenant is None:
             logger.error(f"User {user.username} has no associated tenant")
             raise ValueError("User has no associated tenant")
@@ -308,7 +309,6 @@ def extract_text_from_xml(file_path: str) -> str:
 
 def extract_text_from_html(file_path: str) -> str:
     try:
-        from bs4 import BeautifulSoup
         with open(file_path, "r", encoding="utf-8") as f:
             soup = BeautifulSoup(f, "html.parser")
         return soup.get_text().strip()
@@ -326,7 +326,6 @@ def extract_text_from_md(file_path: str) -> str:
 
 def extract_text_from_yaml(file_path: str) -> str:
     try:
-        import yaml
         with open(file_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         return yaml.dump(data).strip()
@@ -336,7 +335,6 @@ def extract_text_from_yaml(file_path: str) -> str:
 
 def extract_text_from_ini(file_path: str) -> str:
     try:
-        import configparser
         config = configparser.ConfigParser()
         config.read(file_path)
         output = []
@@ -407,9 +405,7 @@ def hybrid_search(
         keyword_results = []
         if keywords:
             keyword_filter = Filter(
-                should=[
-                    FieldCondition(key="page_content", match=MatchValue(value=kw)) for kw in keywords
-                ]
+                should=[FieldCondition(key="page_content", match=MatchValue(value=kw)) for kw in keywords]
             )
             keyword_results = client.scroll(
                 collection_name=collection_name,
@@ -529,12 +525,47 @@ def ask_question(
         logger.error(f"Error in ask_question: {e}")
         raise
 
-def retrieve_documents_by_vector_id(document_id: str, user, collection_name: str) -> List[Dict]:
+# def retrieve_documents_by_vector_id(vector_store_id: str, user, collection_name: str) -> List[Dict]:
+#     try:
+#         vector_store = get_qdrant_vector_store(user, collection_name)
+#         logger.debug(f"Retrieving documents for vector_store_id: {vector_store_id}, collection: {collection_name}")
+#         filter = Filter(
+#             must=[
+#                 FieldCondition(
+#                     key="metadata.vector_store_id",
+#                     match=MatchValue(value=vector_store_id)
+#                 )
+#             ]
+#         )
+#         search_result = vector_store.client.scroll(
+#             collection_name=collection_name,
+#             scroll_filter=filter,
+#             limit=100,
+#             with_vectors=False,
+#             with_payload=True
+#         )
+#         documents = [
+#             {"content": record.payload.get("page_content", ""), "metadata": record.payload.get("metadata", {})}
+#             for record in search_result[0]
+#         ]
+#         logger.info(f"Retrieved {len(documents)} documents for vector_store_id: {vector_store_id}")
+#         return documents
+#     except Exception as e:
+#         logger.error(f"Error retrieving documents for vector_store_id {vector_store_id}: {e}")
+#         return []
+def retrieve_documents_by_vector_id(vector_store_id: str, user, collection_name: str) -> List[Dict]:
     try:
         vector_store = get_qdrant_vector_store(user, collection_name)
-        print(document_id)
+        logger.debug(f"Retrieving documents for vector_store_id: {vector_store_id}, collection: {collection_name}")
+
+        # Fetch documents from Qdrant where metadata.vector_store_id matches
         filter = Filter(
-            must=[FieldCondition(key="metadata.document_id", match=MatchValue(value=document_id))]
+            must=[
+                FieldCondition(
+                    key="metadata.vector_store_id",
+                    match=MatchValue(value=vector_store_id)
+                )
+            ]
         )
         search_result = vector_store.client.scroll(
             collection_name=collection_name,
@@ -543,55 +574,86 @@ def retrieve_documents_by_vector_id(document_id: str, user, collection_name: str
             with_vectors=False,
             with_payload=True
         )
-        if not search_result[0]:
-            document = DocumentModel.objects.filter(id=document_id).first()
-            if not document:
-                logger.warning(f"No document found with ID {document_id}")
-                return []
-            file_ext = Path(document.title).suffix.lower()
-            insert_document_to_vectorstore(
-                document.content,
-                "file",
-                file_ext,
-                document_id,
-                user,
-                collection_name
-            )
-            search_result = vector_store.client.scroll(
-                collection_name=collection_name,
-                scroll_filter=filter,
-                limit=100,
-                with_vectors=False,
-                with_payload=True
-            )
-            if not search_result[0]:
-                logger.warning(f"No vectors found after insertion for document ID {document_id}")
-                return []
         documents = [
             {"content": record.payload.get("page_content", ""), "metadata": record.payload.get("metadata", {})}
             for record in search_result[0]
         ]
-        logger.info(f"Retrieved {len(documents)} documents for document_id: {document_id}")
+        logger.info(f"Retrieved {len(documents)} documents from Qdrant for vector_store_id: {vector_store_id}")
+
+        # Fetch documents from DocumentAccess
+        vector_store_obj = get_object_or_404(VectorStore, id=vector_store_id, tenant=user.tenant)
+        document_access = DocumentAccess.objects.filter(
+            vector_store=vector_store_obj,
+            document__tenant=user.tenant
+        ).select_related('document')
+        access_documents = []
+        seen_document_ids = {doc["metadata"].get("document_id") for doc in documents}
+
+        for access in document_access:
+            doc = access.document
+            if str(doc.id) not in seen_document_ids:
+                # Fetch Qdrant data using document_id
+                qdrant_docs = vector_store.client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="metadata.document_id",
+                                match=MatchValue(value=str(doc.id))
+                            )
+                        ]
+                    ),
+                    limit=100,
+                    with_vectors=False,
+                    with_payload=True
+                )[0]
+                if not qdrant_docs:
+                    logger.warning(f"No Qdrant data found for document_id {doc.id} in DocumentAccess")
+                    continue
+                for record in qdrant_docs:
+                    access_documents.append({
+                        "content": record.payload.get("page_content", ""),
+                        "metadata": record.payload.get("metadata", {})
+                    })
+                seen_document_ids.add(str(doc.id))
+
+        documents.extend(access_documents)
+        logger.info(f"Total documents retrieved (Qdrant + DocumentAccess): {len(documents)} for vector_store_id: {vector_store_id}")
         return documents
     except Exception as e:
-        logger.error(f"Error retrieving documents by document_id: {e}")
+        logger.error(f"Error retrieving documents for vector_store_id {vector_store_id}: {e}")
         return []
 
-def insert_document_to_vectorstore(text: str, source_type: str, file_ext: str, document_id: str, user, collection_name: str):
+
+def insert_document_to_vectorstore(
+    text: str,
+    source_type: str,
+    file_ext: str,
+    document_id: str,
+    user,
+    collection_name: str,
+    vector_store_id: str
+):
     try:
         vector_store = get_qdrant_vector_store(user, collection_name)
         docs = smart_split_text(text, file_ext)
-        logger.info(f"Splitting text into {len(docs)} chunks...")
+        logger.info(f"Splitting text into {len(docs)} chunks for document_id {document_id}")
         metadata = extract_metadata(text, file_ext)
-        metadata["document_id"] = document_id
+        metadata.update({
+            "document_id": document_id,
+            "vector_store_id": vector_store_id,
+            "source_type": source_type,
+            "file_ext": file_ext,
+            "tenant_id": str(user.tenant.id)
+        })
         for doc in docs:
             if not hasattr(doc, "metadata") or not isinstance(doc.metadata, dict):
                 doc.metadata = {}
             doc.metadata.update(metadata)
         vector_store.add_documents(docs, batch_size=64)
-        logger.info(f"Inserted {len(docs)} chunks into Qdrant collection '{collection_name}'")
+        logger.info(f"Inserted {len(docs)} chunks for document_id {document_id} into vector store {vector_store_id} in collection {collection_name}")
     except Exception as e:
-        logger.error(f"Error inserting document to vector store: {e}")
+        logger.error(f"Error inserting document {document_id} to vector store {vector_store_id}: {e}")
         raise
 
 def delete_documents_by_vector_id(document_id: str, user, collection_name: str) -> bool:

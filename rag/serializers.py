@@ -2,6 +2,8 @@
 
 from rest_framework import serializers
 from .models import Tenant, User, VectorStore, Document, Assistant, Thread, Message, Run, DocumentAccess, OpenAIKey, DocumentAlert
+from django.shortcuts import get_object_or_404
+
 
 class TenantSerializer(serializers.ModelSerializer):
     class Meta:
@@ -155,7 +157,7 @@ class MessageSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Message
-        fields = ['id', 'thread_id', 'content', 'created_at']
+        fields = ['id', 'thread_id', 'role', 'content', 'created_at']
         read_only_fields = ['id', 'created_at']
 
     def validate_content(self, value):
@@ -193,15 +195,107 @@ class RunSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Invalid assistant_id.")
         return value
 
+# class DocumentAccessSerializer(serializers.ModelSerializer):
+#     document_id = serializers.CharField(write_only=True)
+#     vector_store_id = serializers.CharField(write_only=True)
+#     granted_by = serializers.PrimaryKeyRelatedField(read_only=True)
+
+#     class Meta:
+#         model = DocumentAccess
+#         fields = ['id', 'document_id', 'vector_store_id', 'granted_by', 'granted_at']
+#         read_only_fields = ['id', 'granted_at']
 class DocumentAccessSerializer(serializers.ModelSerializer):
-    document_id = serializers.CharField(write_only=True)
+    document_ids = serializers.ListField(
+        child=serializers.CharField(),
+        write_only=True,
+        help_text="List of document IDs to grant access to"
+    )
     vector_store_id = serializers.CharField(write_only=True)
     granted_by = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = DocumentAccess
-        fields = ['id', 'document_id', 'vector_store_id', 'granted_by', 'granted_at']
+        fields = ['id', 'document_ids', 'vector_store_id', 'granted_by', 'granted_at']
         read_only_fields = ['id', 'granted_at']
+
+    def validate(self, data):
+        vector_store_id = data.get('vector_store_id')
+        document_ids = data.get('document_ids')
+        user = self.context['request'].user
+
+        # Validate vector_store_id
+        if not vector_store_id:
+            raise serializers.ValidationError({"vector_store_id": "This field is required."})
+        vector_store = get_object_or_404(VectorStore, id=vector_store_id, tenant=user.tenant)
+
+        # Validate document_ids
+        if not document_ids:
+            raise serializers.ValidationError({"document_ids": "At least one document ID is required."})
+        invalid_ids = []
+        valid_documents = []
+        for doc_id in document_ids:
+            try:
+                doc = Document.objects.get(id=doc_id, tenant=user.tenant)
+                valid_documents.append(doc)
+            except Document.DoesNotExist:
+                invalid_ids.append(doc_id)
+        if invalid_ids:
+            raise serializers.ValidationError({
+                "document_ids": f"Invalid document IDs: {', '.join(invalid_ids)}"
+            })
+
+        # Check for existing access to prevent duplicates
+        existing_access = DocumentAccess.objects.filter(
+            vector_store=vector_store,
+            document__in=valid_documents
+        ).values_list('document__id', flat=True)
+        existing_ids = [str(doc_id) for doc_id in existing_access]
+        duplicate_ids = [doc_id for doc_id in document_ids if doc_id in existing_ids]
+        if duplicate_ids:
+            raise serializers.ValidationError({
+                "document_ids": f"Access already granted for document IDs: {', '.join(duplicate_ids)}"
+            })
+
+        data['vector_store'] = vector_store
+        data['documents'] = valid_documents
+        return data
+
+class DocumentAccessRemoveSerializer(serializers.Serializer):
+    document_ids = serializers.ListField(
+        child=serializers.CharField(),
+        write_only=True,
+        help_text="List of document IDs to remove access from"
+    )
+    vector_store_id = serializers.CharField(write_only=True)
+
+    def validate(self, data):
+        vector_store_id = data.get('vector_store_id')
+        document_ids = data.get('document_ids')
+        user = self.context['request'].user
+
+        # Validate vector_store_id
+        if not vector_store_id:
+            raise serializers.ValidationError({"vector_store_id": "This field is required."})
+        vector_store = get_object_or_404(VectorStore, id=vector_store_id, tenant=user.tenant)
+
+        # Validate document_ids
+        if not document_ids:
+            raise serializers.ValidationError({"document_ids": "At least one document ID is required."})
+        invalid_ids = []
+        valid_document_ids = []
+        for doc_id in document_ids:
+            if Document.objects.filter(id=doc_id, tenant=user.tenant).exists():
+                valid_document_ids.append(doc_id)
+            else:
+                invalid_ids.append(doc_id)
+        if invalid_ids:
+            raise serializers.ValidationError({
+                "document_ids": f"Invalid document IDs: {', '.join(invalid_ids)}"
+            })
+
+        data['vector_store'] = vector_store
+        data['valid_document_ids'] = valid_document_ids
+        return data
 
 class OpenAIKeySerializer(serializers.ModelSerializer):
     class Meta:

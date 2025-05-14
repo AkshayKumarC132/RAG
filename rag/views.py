@@ -1,6 +1,7 @@
 from rest_framework import status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from knox.models import AuthToken
 from django.shortcuts import get_object_or_404
 from .models import Tenant, Document, VectorStore, Assistant, Thread, Message, Run, DocumentAlert, DocumentAccess, OpenAIKey
@@ -22,7 +23,10 @@ User = get_user_model()
 class TokenAuthenticatedMixin:
     def initial(self, request, *args, **kwargs):
         try:
-            self.user = get_authenticated_user(kwargs.get('token'))
+            authenticated_user = get_authenticated_user(kwargs.get('token'))
+            # Update request.user to ensure serializer context has the authenticated user
+            request.user = authenticated_user
+            self.user = authenticated_user
             super().initial(request, *args, **kwargs)
         except ValueError as e:
             logger.error(f"Authentication failed: {e}")
@@ -166,7 +170,8 @@ class IngestAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
                 file_ext,
                 str(document.id),
                 user=self.user,
-                collection_name=self.user.tenant.collection_name
+                collection_name=self.user.tenant.collection_name,
+                vector_store_id=str(vector_store.id)
             )
 
             enrich_document(document, extracted_text, file_ext)
@@ -277,6 +282,89 @@ class MessageRetrieveUpdateDestroyAPIView(TokenAuthenticatedMixin, generics.Retr
     def get_queryset(self):
         return Message.objects.filter(thread__tenant=self.user.tenant)
 
+# class RunCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
+#     serializer_class = RunSerializer
+
+#     def perform_create(self, serializer):
+#         try:
+#             thread_id = serializer.validated_data['thread_id']
+#             assistant_id = serializer.validated_data['assistant_id']
+#             thread = get_object_or_404(Thread, id=thread_id, tenant=self.user.tenant)
+#             assistant = get_object_or_404(Assistant, id=assistant_id, tenant=self.user.tenant)
+
+#             # Check for user messages
+#             messages = thread.messages.order_by('created_at')
+#             user_messages = [msg.content for msg in messages if msg.role == 'user']
+#             if not user_messages:
+#                 raise ValidationError({"error": "No user messages found in the thread."})
+
+#             # Determine vector store
+#             vector_store = assistant.vector_store
+#             if not vector_store:
+#                 vector_store = thread.vector_store
+#                 if not vector_store:
+#                     vector_store = VectorStore.objects.filter(tenant=self.user.tenant).first()
+#                     if not vector_store:
+#                         raise ValidationError({"error": "No vector store available."})
+
+#             # Check for documents
+#             documents = retrieve_documents_by_vector_id(
+#                 str(vector_store.id),
+#                 user=self.user,
+#                 collection_name=self.user.tenant.collection_name
+#             )
+#             if not documents:
+#                 raise ValidationError({
+#                     "error": f"No documents are assigned to the vector store {vector_store.id}."
+#                 })
+
+#             run = serializer.save(thread=thread, assistant=assistant, status='queued')
+#             threading.Thread(target=self.process_run, args=(run,)).start()
+#             logger.info(f"Started background processing for run {run.id}")
+#         except ValidationError as e:
+#             logger.error(f"Run creation failed: {e}")
+#             raise
+#         except Exception as e:
+#             logger.error(f"Error creating run: {e}")
+#             raise ValidationError({"error": f"Failed to create run: {str(e)}"})
+
+#     def process_run(self, run):
+#         try:
+#             run.status = 'in_progress'
+#             run.save()
+#             thread = run.thread
+#             assistant = run.assistant
+#             messages = thread.messages.order_by('created_at')
+#             user_messages = [msg.content for msg in messages if msg.role == 'user']
+#             query = user_messages[-1]
+#             vector_store = assistant.vector_store or thread.vector_store or VectorStore.objects.filter(tenant=self.user.tenant).first()
+#             documents = retrieve_documents_by_vector_id(
+#                 str(vector_store.id),
+#                 user=self.user,
+#                 collection_name=self.user.tenant.collection_name
+#             )
+#             answer = ask_question(
+#                 query,
+#                 "file",
+#                 documents=documents,
+#                 user=self.user,
+#                 collection_name=self.user.tenant.collection_name
+#             )
+#             Message.objects.create(thread=thread, role='assistant', content=answer)
+#             run.status = 'completed'
+#             run.completed_at = datetime.now()
+#             run.save()
+#             logger.info(f"Run {run.id} completed successfully")
+#         except Exception as e:
+#             run.status = 'failed'
+#             run.save()
+#             Message.objects.create(
+#                 thread=thread,
+#                 role='assistant',
+#                 content=f'Run failed due to an error: {str(e)}'
+#             )
+#             logger.error(f"Run {run.id} processing failed: {e}")
+
 class RunCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
     serializer_class = RunSerializer
 
@@ -286,13 +374,42 @@ class RunCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
             assistant_id = serializer.validated_data['assistant_id']
             thread = get_object_or_404(Thread, id=thread_id, tenant=self.user.tenant)
             assistant = get_object_or_404(Assistant, id=assistant_id, tenant=self.user.tenant)
+
+            # Check for user messages
+            messages = thread.messages.order_by('created_at')
+            user_messages = [msg.content for msg in messages if msg.role == 'user']
+            if not user_messages:
+                raise ValidationError({"error": "No user messages found in the thread."})
+
+            # Determine vector store
+            vector_store = assistant.vector_store
+            if not vector_store:
+                vector_store = thread.vector_store
+                if not vector_store:
+                    vector_store = VectorStore.objects.filter(tenant=self.user.tenant).first()
+                    if not vector_store:
+                        raise ValidationError({"error": "No vector store available."})
+
+            # Check for documents
+            documents = retrieve_documents_by_vector_id(
+                str(vector_store.id),
+                user=self.user,
+                collection_name=self.user.tenant.collection_name
+            )
+            if not documents:
+                raise ValidationError({
+                    "error": f"No documents are assigned to the vector store {vector_store.id}."
+                })
+
             run = serializer.save(thread=thread, assistant=assistant, status='queued')
             threading.Thread(target=self.process_run, args=(run,)).start()
             logger.info(f"Started background processing for run {run.id}")
-            return run
+        except ValidationError as e:
+            logger.error(f"Run creation failed: {e}")
+            raise
         except Exception as e:
             logger.error(f"Error creating run: {e}")
-            raise
+            raise ValidationError({"error": f"Failed to create run: {str(e)}"})
 
     def process_run(self, run):
         try:
@@ -302,23 +419,8 @@ class RunCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
             assistant = run.assistant
             messages = thread.messages.order_by('created_at')
             user_messages = [msg.content for msg in messages if msg.role == 'user']
-            if not user_messages:
-                run.status = 'failed'
-                run.save()
-                logger.warning(f"Run {run.id} failed: No user messages found")
-                return
             query = user_messages[-1]
-            vector_store = assistant.vector_store
-            if not vector_store:
-                # Use thread's vector store or query available vector stores
-                vector_store = thread.vector_store
-                if not vector_store:
-                    vector_store = VectorStore.objects.filter(tenant=self.user.tenant).first()
-                    if not vector_store:
-                        run.status = 'failed'
-                        run.save()
-                        logger.warning(f"Run {run.id} failed: No vector store available")
-                        return
+            vector_store = assistant.vector_store or thread.vector_store or VectorStore.objects.filter(tenant=self.user.tenant).first()
             documents = retrieve_documents_by_vector_id(
                 str(vector_store.id),
                 user=self.user,
@@ -339,6 +441,11 @@ class RunCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
         except Exception as e:
             run.status = 'failed'
             run.save()
+            Message.objects.create(
+                thread=thread,
+                role='assistant',
+                content=f'Run failed due to an error: {str(e)}'
+            )
             logger.error(f"Run {run.id} processing failed: {e}")
 
 class RunListAPIView(TokenAuthenticatedMixin, generics.ListAPIView):
@@ -383,12 +490,77 @@ class DocumentAlertRetrieveUpdateDestroyAPIView(TokenAuthenticatedMixin, generic
 
 class DocumentAccessCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
     serializer_class = DocumentAccessSerializer
+
     def perform_create(self, serializer):
-        document_id = self.request.data.get('document_id')
-        vector_store_id = self.request.data.get('vector_store_id')
-        document = get_object_or_404(Document, id=document_id, tenant=self.user.tenant)
-        vector_store = get_object_or_404(VectorStore, id=vector_store_id, tenant=self.user.tenant)
-        serializer.save(document=document, vector_store=vector_store, granted_by=self.user)
+        try:
+            serializer.is_valid(raise_exception=True)
+            vector_store = serializer.validated_data['vector_store']
+            documents = serializer.validated_data['documents']
+            granted_by = self.user
+
+            # Create DocumentAccess records for each document
+            created_access = []
+            for document in documents:
+                access = DocumentAccess(
+                    document=document,
+                    vector_store=vector_store,
+                    granted_by=granted_by
+                )
+                access.save()
+                created_access.append({
+                    "document_id": str(document.id),
+                    "vector_store_id": str(vector_store.id),
+                    "id": access.id
+                })
+
+            logger.info(f"Granted access to {len(created_access)} documents for vector_store {vector_store.id}")
+            return Response({
+                "message": f"Access granted to {len(created_access)} documents.",
+                "created_access": created_access
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.error(f"Error granting document access: {e}")
+            raise ValidationError({"error": str(e)})
+
+class DocumentAccessRemoveAPIView(TokenAuthenticatedMixin, generics.UpdateAPIView):
+    serializer_class = DocumentAccessRemoveSerializer
+
+    def put(self, request, *args, **kwargs):
+        try:
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            vector_store = serializer.validated_data['vector_store']
+            valid_document_ids = serializer.validated_data['valid_document_ids']
+
+            # Find and delete DocumentAccess records
+            deleted_count = 0
+            deleted_ids = []
+            for doc_id in valid_document_ids:
+                access_records = DocumentAccess.objects.filter(
+                    vector_store=vector_store,
+                    document__id=doc_id,
+                    document__tenant=self.user.tenant
+                )
+                count = access_records.count()
+                if count > 0:
+                    deleted_ids.append(doc_id)
+                    access_records.delete()
+                    deleted_count += count
+
+            if deleted_count == 0:
+                logger.info(f"No access records found to remove for vector_store {vector_store.id}")
+                return Response({
+                    "message": "No access records found for the specified documents."
+                }, status=status.HTTP_200_OK)
+
+            logger.info(f"Removed access for {deleted_count} documents from vector_store {vector_store.id}")
+            return Response({
+                "message": f"Access removed for {deleted_count} documents.",
+                "removed_document_ids": deleted_ids
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Error removing document access: {e}")
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 class DocumentAccessListAPIView(TokenAuthenticatedMixin, generics.ListAPIView):
     serializer_class = DocumentAccessSerializer
