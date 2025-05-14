@@ -41,3 +41,4 @@ comtypes
 rank_bm25
 whisper
 nltk
+bs4
