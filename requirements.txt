@@ -42,3 +42,4 @@ rank_bm25
 whisper
 nltk
 bs4
+drf_yasg
