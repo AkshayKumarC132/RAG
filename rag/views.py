@@ -431,7 +431,8 @@ class RunCreateAPIView(TokenAuthenticatedMixin, generics.CreateAPIView):
                 "file",
                 documents=documents,
                 user=self.user,
-                collection_name=self.user.tenant.collection_name
+                collection_name=self.user.tenant.collection_name,
+                assistant_instructions=assistant.instructions  # Pass assistant instructions
             )
             Message.objects.create(thread=thread, role='assistant', content=answer)
             run.status = 'completed'

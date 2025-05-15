@@ -74,6 +74,7 @@ class VectorStore(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="vector_stores")
     name = models.CharField(max_length=255)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"VectorStore {self.id} - {self.name}"
@@ -96,8 +97,15 @@ class Assistant(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="assistants")
     name = models.CharField(max_length=255)
     vector_store = models.ForeignKey(VectorStore, on_delete=models.CASCADE, related_name="assistants", null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    instructions = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Custom instructions for the assistant, used as the system prompt during runs."
+    )
     creator = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_assistants", null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
 
     def __str__(self):
         return f"Assistant {self.id} - {self.name}"
@@ -107,6 +115,7 @@ class Thread(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="threads")
     vector_store = models.ForeignKey(VectorStore, on_delete=models.CASCADE, related_name="threads")
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"Thread {self.id}"
@@ -117,6 +126,7 @@ class Message(models.Model):
     role = models.CharField(max_length=20)
     content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"Message in {self.thread.id} by {self.role}"
@@ -127,6 +137,7 @@ class Run(models.Model):
     assistant = models.ForeignKey(Assistant, on_delete=models.CASCADE, related_name="runs")
     status = models.CharField(max_length=20, default="queued")
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
@@ -138,6 +149,7 @@ class DocumentAlert(models.Model):
     keyword = models.CharField(max_length=255)
     snippet = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"Alert on {self.document.title}: {self.keyword}"
@@ -148,6 +160,7 @@ class DocumentAccess(models.Model):
     vector_store = models.ForeignKey(VectorStore, on_delete=models.CASCADE, related_name="access")
     granted_by = models.ForeignKey(User, on_delete=models.CASCADE)
     granted_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         unique_together = ('document', 'vector_store')

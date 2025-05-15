@@ -126,11 +126,12 @@ class DocumentSerializer(serializers.ModelSerializer):
 
 class AssistantSerializer(serializers.ModelSerializer):
     vector_store_id = serializers.CharField(write_only=True, required=False)
+    instructions = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = Assistant
-        fields = ['id', 'name', 'vector_store_id', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'name', 'vector_store_id', 'created_at','instructions', 'updated_at']
+        read_only_fields = ['id', 'created_at','updated_at']
 
     def validate_name(self, value):
         if not value.strip():

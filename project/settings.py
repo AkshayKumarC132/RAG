@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'knox',
     'corsheaders',
+    'drf_yasg',  # Add drf-yasg for Swagger
 ]
 
 MIDDLEWARE = [

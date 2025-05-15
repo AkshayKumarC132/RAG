@@ -448,18 +448,21 @@ def ask_question(
     source_type: str,
     documents: Optional[List[dict]] = None,
     user=None,
-    collection_name: Optional[str] = None
+    collection_name: Optional[str] = None,
+    assistant_instructions: Optional[str] = None
 ) -> str:
     try:
         start = time.time()
         api_key = get_openai_api_key(user.id if user else 0)
         llm = ChatOpenAI(api_key=api_key, temperature=0)
 
-        system_prompt = """
+        # Use assistant_instructions if provided; otherwise, use default system prompt
+        default_system_prompt = """
         You are a helpful document analyst. Provide accurate, concise, and detailed answers based on the provided document context.
         Use the information in the documents to answer the question directly and avoid including irrelevant details.
         If the documents do not contain enough information, state so clearly.
         """
+        system_prompt = assistant_instructions if assistant_instructions else default_system_prompt
 
         final_context = ""
         max_token_threshold = 4000
